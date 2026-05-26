@@ -1,0 +1,22 @@
+# Dependencies
+node_modules/
+pnpm-lock.yaml
+
+# Foundry
+cache/
+out/
+broadcast/
+lib/
+
+# Docs
+docs/
+
+# Dotenv file
+.env
+
+# MacOS system files
+.DS_Store
+*/.DS_Store
+
+# Deployments (user-generated, kept local)
+script/deployments/

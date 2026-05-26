@@ -1,0 +1,13 @@
+{
+  "allowlist": [],
+  "thresholdAmount": 0,
+  "policyEngine": "0x0000000000000000000000000000000000000000",
+  "authorizedCallers": [],
+  "comment": "Configuration for AdvancedPoolHooks deployment",
+  "examples": {
+    "allowlist_example": ["0x1234567890123456789012345678901234567890", "0x0987654321098765432109876543210987654321"],
+    "thresholdAmount_example": "1000000000000000000000",
+    "policyEngine_example": "0xPolicyEngineAddress",
+    "authorizedCallers_example": ["0xTokenPool1Address", "0xTokenPool2Address"]
+  }
+}

@@ -1,0 +1,76 @@
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.24;
+
+import {Script, console} from "forge-std/Script.sol";
+import {HelperConfig} from "../HelperConfig.s.sol"; // Network configuration helper
+import {TokenAdminRegistry} from "@chainlink/contracts-ccip/contracts/tokenAdminRegistry/TokenAdminRegistry.sol";
+
+contract AcceptAdminRole is Script {
+    HelperConfig public helperConfig;
+
+    function run() external {
+        // Initialize HelperConfig
+        helperConfig = new HelperConfig();
+
+        uint256 chainId = block.chainid;
+        string memory chainName = helperConfig.getChainName(chainId);
+        HelperConfig.NetworkConfig memory config = helperConfig.getNetworkConfig(chainId);
+
+        console.log("");
+        console.log("========================================");
+        console.log(unicode"👑 Accept Admin Role");
+        console.log("========================================");
+        console.log(string.concat("Chain:        ", chainName));
+        console.log(string.concat("Action:       ", "Accept admin role"));
+        console.log("========================================");
+        console.log("");
+
+        // Get deployed token address — TOKEN env var takes priority, then {CHAIN}_TOKEN
+        address tokenAddress = helperConfig.getDeployedToken(chainId);
+        require(
+            tokenAddress != address(0),
+            string.concat(
+                "Token not deployed. Set TOKEN or ", config.chainNameIdentifier, "_TOKEN environment variable."
+            )
+        );
+
+        // Validate TokenAdminRegistry address
+        require(config.tokenAdminRegistry != address(0), "TokenAdminRegistry not defined for this network");
+
+        // Instantiate the TokenAdminRegistry contract
+        TokenAdminRegistry tokenAdminRegistryContract = TokenAdminRegistry(config.tokenAdminRegistry);
+
+        // Fetch the token configuration
+        TokenAdminRegistry.TokenConfig memory tokenConfig = tokenAdminRegistryContract.getTokenConfig(tokenAddress);
+        address pendingAdministrator = tokenConfig.pendingAdministrator;
+
+        console.log("Accept Admin Role Parameters:");
+        console.log(string.concat("  Token:                        ", vm.toString(tokenAddress)));
+        console.log(string.concat("  Token Admin Registry:         ", vm.toString(config.tokenAdminRegistry)));
+        console.log(string.concat("  Pending Administrator:        ", vm.toString(pendingAdministrator)));
+
+        vm.startBroadcast();
+
+        (, address broadcaster,) = vm.readCallers();
+        console.log(string.concat("  Signer:                       ", vm.toString(broadcaster)));
+        console.log("");
+
+        require(pendingAdministrator == broadcaster, "Only the pending administrator can accept the admin role");
+
+        console.log(string.concat("\n[Step 1] Accepting admin role for token on ", chainName));
+        tokenAdminRegistryContract.acceptAdminRole(tokenAddress);
+        console.log(unicode"✅ Admin role accepted successfully!");
+
+        vm.stopBroadcast();
+
+        console.log("");
+        console.log("========================================");
+        console.log(string.concat(unicode"✅ Admin Role Accepted on ", chainName, "!"));
+        console.log("========================================");
+        console.log(string.concat("Token Address: ", vm.toString(tokenAddress)));
+        console.log(string.concat("Token Address: ", helperConfig.getExplorerUrl(chainId, "/address/", tokenAddress)));
+        console.log(string.concat("New Administrator: ", vm.toString(broadcaster)));
+        console.log("========================================");
+        console.log("");
+    }
+}
