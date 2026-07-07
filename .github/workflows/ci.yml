@@ -53,7 +53,7 @@ jobs:
       - run: forge lint
 
   # Fork tests default to public Sepolia RPC endpoints (with fallback), so no
-  # secret is required; set SEPOLIA_RPC_URL to override with a private endpoint.
+  # secret is required; set ETHEREUM_SEPOLIA_RPC_URL to override with a private endpoint.
   test:
     name: forge test
     runs-on: ubuntu-latest

@@ -1386,10 +1386,10 @@ Run the test suite with:
 forge test
 ```
 
-No configuration is needed: the fork tests default to public Ethereum Sepolia RPC endpoints (trying several in order, so a single unavailable provider does not fail the suite). To use a private or paid endpoint instead, set the optional `SEPOLIA_RPC_URL` environment variable:
+No configuration is needed: the fork tests default to public Ethereum Sepolia RPC endpoints (trying several in order, so a single unavailable provider does not fail the suite). To use a private or paid endpoint instead, set `ETHEREUM_SEPOLIA_RPC_URL` (the same variable used by the deployment scripts):
 
 ```bash
-SEPOLIA_RPC_URL=<your-sepolia-rpc-url> forge test
+ETHEREUM_SEPOLIA_RPC_URL=<your-sepolia-rpc-url> forge test
 ```
 
 The fork tests deploy the token and pool fixtures by running the repo's own deploy scripts, so they exercise the same code paths as the commands documented above.

@@ -9,9 +9,9 @@ import {DeployBurnMintTokenPool} from "../script/deploy/DeployBurnMintTokenPool.
 /// @title BaseForkTest
 /// @notice Shared base for Ethereum Sepolia fork tests.
 ///
-/// RPC resolution: the SEPOLIA_RPC_URL environment variable takes priority when set
-/// (e.g. a private/paid endpoint). When it is not set, the test falls back to a list
-/// of public Sepolia RPC endpoints, trying each in order so a single flaky provider
+/// RPC resolution: the ETHEREUM_SEPOLIA_RPC_URL environment variable takes priority when
+/// set (e.g. a private/paid endpoint). When it is not set, the test falls back to a
+/// list of public Sepolia RPC endpoints, trying each in order so a single flaky provider
 /// does not fail the suite. This makes `forge test` work with zero configuration.
 ///
 /// Fixture: `deployTokenFixture` / `deployTokenAndPoolFixture` deploy the repo's own
@@ -30,10 +30,10 @@ abstract contract BaseForkTest is Test {
         networkConfig = helperConfig.getNetworkConfig(block.chainid);
     }
 
-    /// @dev Creates and selects a Sepolia fork. SEPOLIA_RPC_URL overrides; otherwise
-    /// public endpoints are tried in order until one serves the fork.
+    /// @dev Creates and selects a Sepolia fork. ETHEREUM_SEPOLIA_RPC_URL overrides;
+    /// otherwise public endpoints are tried in order until one serves the fork.
     function _createSepoliaFork() internal {
-        string memory rpcOverride = vm.envOr("SEPOLIA_RPC_URL", string(""));
+        string memory rpcOverride = vm.envOr("ETHEREUM_SEPOLIA_RPC_URL", string(""));
         if (bytes(rpcOverride).length > 0) {
             vm.createSelectFork(rpcOverride);
             return;
@@ -51,7 +51,7 @@ abstract contract BaseForkTest is Test {
                 emit log_string(string.concat("Public Sepolia RPC unavailable, trying next: ", publicRpcs[i]));
             }
         }
-        revert("BaseForkTest: no Sepolia RPC available (set SEPOLIA_RPC_URL to override)");
+        revert("BaseForkTest: no Sepolia RPC available (set ETHEREUM_SEPOLIA_RPC_URL to override)");
     }
 
     /// @dev Deploys the token by running the repo's DeployToken script. The deployed address
