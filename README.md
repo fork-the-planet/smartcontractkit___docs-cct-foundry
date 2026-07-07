@@ -1377,3 +1377,19 @@ Prepended directly to a single `forge script` command. They apply to that one in
 | `ADD_ADDRESSES`, `REMOVE_ADDRESSES` | [Manage Allowlist](#manage-allowlist), [Manage Authorized Callers](#manage-authorized-callers) | |
 | `CHECK_ADDRESS` | [Manage Allowlist](#manage-allowlist) | |
 | `DEST_GAS_OVERHEAD`, `DEST_BYTES_OVERHEAD`, `FINALITY_FEE_USD_CENTS`, `FAST_FINALITY_FEE_USD_CENTS`, `FINALITY_TRANSFER_FEE_BPS`, `FAST_FINALITY_TRANSFER_FEE_BPS`, `DISABLE` | [Manage Token Transfer Fee Config](#manage-token-transfer-fee-config) | |
+
+## Testing
+
+Run the test suite with:
+
+```bash
+forge test
+```
+
+No configuration is needed: the fork tests default to public Ethereum Sepolia RPC endpoints (trying several in order, so a single unavailable provider does not fail the suite). To use a private or paid endpoint instead, set the optional `SEPOLIA_RPC_URL` environment variable:
+
+```bash
+SEPOLIA_RPC_URL=<your-sepolia-rpc-url> forge test
+```
+
+The fork tests deploy the token and pool fixtures by running the repo's own deploy scripts, so they exercise the same code paths as the commands documented above.

@@ -59,10 +59,16 @@ contract GetTokenConfig is Script {
         console.log("========================================");
         console.log(string.concat("Token:        ", helperConfig.getExplorerUrl(chainId, "/address/", tokenAddress)));
         if (tokenConfig.tokenPool != address(0)) {
-            console.log(string.concat("Token Pool:   ", helperConfig.getExplorerUrl(chainId, "/address/", tokenConfig.tokenPool)));
+            console.log(
+                string.concat(
+                    "Token Pool:   ", helperConfig.getExplorerUrl(chainId, "/address/", tokenConfig.tokenPool)
+                )
+            );
         }
         console.log(
-            string.concat("Registry:     ", helperConfig.getExplorerUrl(chainId, "/address/", config.tokenAdminRegistry))
+            string.concat(
+                "Registry:     ", helperConfig.getExplorerUrl(chainId, "/address/", config.tokenAdminRegistry)
+            )
         );
         console.log("========================================");
         console.log("");
