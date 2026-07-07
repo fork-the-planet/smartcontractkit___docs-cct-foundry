@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  FOUNDRY_VERSION: v1.7.1
+
+jobs:
+  build:
+    name: forge build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a # v1.9.0
+        with:
+          version: ${{ env.FOUNDRY_VERSION }}
+      - run: npm ci
+      - run: forge build
+
+  fmt:
+    name: forge fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a # v1.9.0
+        with:
+          version: ${{ env.FOUNDRY_VERSION }}
+      - run: forge fmt --check
+
+  lint:
+    name: forge lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a # v1.9.0
+        with:
+          version: ${{ env.FOUNDRY_VERSION }}
+      - run: npm ci
+      - run: forge lint
+
+  # Fork tests default to public Sepolia RPC endpoints (with fallback), so no
+  # secret is required; set ETHEREUM_SEPOLIA_RPC_URL to override with a private endpoint.
+  test:
+    name: forge test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a # v1.9.0
+        with:
+          version: ${{ env.FOUNDRY_VERSION }}
+      - run: npm ci
+      - run: forge test -vv
