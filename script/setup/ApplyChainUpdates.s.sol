@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.24;
 
-import {Script, console} from "forge-std/Script.sol";
+import {console} from "forge-std/Script.sol";
 import {HelperConfig} from "../HelperConfig.s.sol"; // Network configuration helper
 import {TokenPool} from "@chainlink/contracts-ccip/contracts/pools/TokenPool.sol";
 import {RateLimiter} from "@chainlink/contracts-ccip/contracts/libraries/RateLimiter.sol";
 import {ChainHandlers} from "../utils/ChainHandlers.s.sol";
+import {CctActions} from "../../src/actions/CctActions.sol";
+import {EoaExecutor} from "../../src/base/EoaExecutor.s.sol";
 
 /// @notice Configures cross-chain lanes on the source TokenPool by calling applyChainUpdates.
 /// Sets the remote pool(s), remote token, and optional rate limiter configs per destination chain.
@@ -75,7 +77,7 @@ import {ChainHandlers} from "../utils/ChainHandlers.s.sol";
 ///   INBOUND_RATE_LIMIT_CAPACITY   - uint128, token bucket capacity (isEnabled defaults to true when set)
 ///   INBOUND_RATE_LIMIT_RATE       - uint128, token bucket refill rate (isEnabled defaults to true when set)
 ///   INBOUND_RATE_LIMIT_ENABLED    - true/false (optional override; defaults to true if CAPACITY/RATE provided)
-contract ApplyChainUpdates is Script {
+contract ApplyChainUpdates is EoaExecutor {
     HelperConfig public helperConfig;
 
     /// @dev Bundles resolved destination chain parameters into a single struct to
@@ -189,15 +191,11 @@ contract ApplyChainUpdates is Script {
 
         console.log("");
 
-        vm.startBroadcast();
-
         console.log(
             string.concat("[Step 1] Applying chain updates to pool on ", helperConfig.getChainName(sourceChainId))
         );
-        poolContract.applyChainUpdates(chainSelectorRemovals, chainUpdates);
+        executeCalls(CctActions.applyChainUpdates(poolAddress, chainSelectorRemovals, chainUpdates));
         console.log(unicode"✅ Chain updates applied successfully!");
-
-        vm.stopBroadcast();
 
         console.log("");
         console.log("========================================");
@@ -436,15 +434,11 @@ contract ApplyChainUpdates is Script {
         );
         console.log("");
 
-        vm.startBroadcast();
-
         console.log(
             string.concat("\n[Step 1] Applying chain updates to pool on ", helperConfig.getChainName(sourceChainId))
         );
 
         _applyChainUpdateToPool(poolAddress, dest, outboundRateLimiterConfig, inboundRateLimiterConfig);
-
-        vm.stopBroadcast();
 
         console.log("");
         console.log("========================================");
@@ -583,8 +577,8 @@ contract ApplyChainUpdates is Script {
             inboundRateLimiterConfig: inboundRateLimiterConfig
         });
 
-        // Apply the chain updates
-        poolContract.applyChainUpdates(chainSelectorRemovals, chainUpdates);
+        // Apply the chain updates through the shared action layer (broadcast as an EOA).
+        executeCalls(CctActions.applyChainUpdates(poolAddress, chainSelectorRemovals, chainUpdates));
         console.log(unicode"✅ Chain updates applied successfully!");
     }
 

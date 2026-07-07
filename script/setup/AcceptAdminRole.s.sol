@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.24;
 
-import {Script, console} from "forge-std/Script.sol";
+import {console} from "forge-std/Script.sol";
 import {HelperConfig} from "../HelperConfig.s.sol"; // Network configuration helper
 import {TokenAdminRegistry} from "@chainlink/contracts-ccip/contracts/tokenAdminRegistry/TokenAdminRegistry.sol";
+import {CctActions} from "../../src/actions/CctActions.sol";
+import {EoaExecutor} from "../../src/base/EoaExecutor.s.sol";
 
-contract AcceptAdminRole is Script {
+contract AcceptAdminRole is EoaExecutor {
     HelperConfig public helperConfig;
 
     function run() external {
@@ -49,19 +51,15 @@ contract AcceptAdminRole is Script {
         console.log(string.concat("  Token Admin Registry:         ", vm.toString(config.tokenAdminRegistry)));
         console.log(string.concat("  Pending Administrator:        ", vm.toString(pendingAdministrator)));
 
-        vm.startBroadcast();
-
-        (, address broadcaster,) = vm.readCallers();
-        console.log(string.concat("  Signer:                       ", vm.toString(broadcaster)));
+        address signer = broadcaster();
+        console.log(string.concat("  Signer:                       ", vm.toString(signer)));
         console.log("");
 
-        require(pendingAdministrator == broadcaster, "Only the pending administrator can accept the admin role");
+        require(pendingAdministrator == signer, "Only the pending administrator can accept the admin role");
 
         console.log(string.concat("\n[Step 1] Accepting admin role for token on ", chainName));
-        tokenAdminRegistryContract.acceptAdminRole(tokenAddress);
+        executeCalls(CctActions.acceptAdminRole(config.tokenAdminRegistry, tokenAddress));
         console.log(unicode"✅ Admin role accepted successfully!");
-
-        vm.stopBroadcast();
 
         console.log("");
         console.log("========================================");
@@ -69,7 +67,7 @@ contract AcceptAdminRole is Script {
         console.log("========================================");
         console.log(string.concat("Token Address: ", vm.toString(tokenAddress)));
         console.log(string.concat("Token Address: ", helperConfig.getExplorerUrl(chainId, "/address/", tokenAddress)));
-        console.log(string.concat("New Administrator: ", vm.toString(broadcaster)));
+        console.log(string.concat("New Administrator: ", vm.toString(signer)));
         console.log("========================================");
         console.log("");
     }

@@ -41,6 +41,7 @@ contract ApplyChainUpdatesForkTest is BaseForkTest {
     function test_ApplyChainUpdates_ViaJsonFile() public {
         // The script reads a fixed input path; back up the committed example and restore it
         // after the run so the working tree is left untouched.
+        uint256 cleanState = vm.snapshotState();
         string memory originalInput = vm.readFile(INPUT_PATH);
         vm.writeFile(INPUT_PATH, _buildInputJson());
         vm.setEnv("VIA_JSON_FILE", "true");
@@ -52,6 +53,45 @@ contract ApplyChainUpdatesForkTest is BaseForkTest {
 
         _assertEvmDestinationConfigured();
         _assertSvmDestinationConfigured();
+
+        // Second phase in the SAME test (forge runs tests in parallel, and both phases rewrite the
+        // script's fixed input path — separate tests would race on the file): the COMMITTED example.
+        vm.revertToState(cleanState);
+        _runCommittedExample();
+    }
+
+    /// @notice JSON mode with the COMMITTED example file (not a test fixture): every `destChain` it
+    ///         names must resolve through HelperConfig so the example runs clean as shipped. Only the
+    ///         deployment-specific `sourcePool` field is pointed at the test fixture pool.
+    function _runCommittedExample() internal {
+        string memory originalInput = vm.readFile(INPUT_PATH);
+        vm.writeJson(string.concat("\"", vm.toString(address(pool)), "\""), INPUT_PATH, ".sourcePool");
+        vm.setEnv("VIA_JSON_FILE", "true");
+
+        new ApplyChainUpdates().run();
+
+        vm.setEnv("VIA_JSON_FILE", "false");
+        vm.writeFile(INPUT_PATH, originalInput);
+
+        // The committed example configures MANTLE_SEPOLIA, PLUME_TESTNET, and SOLANA_DEVNET.
+        assertTrue(
+            pool.isSupportedChain(helperConfig.getMantleSepoliaConfig().chainSelector),
+            "committed example: Mantle Sepolia not configured"
+        );
+        assertTrue(
+            pool.isSupportedChain(helperConfig.getPlumeTestnetConfig().chainSelector),
+            "committed example: Plume Testnet not configured"
+        );
+        assertTrue(
+            pool.isSupportedChain(helperConfig.getSolanaDevnetConfig().chainSelector),
+            "committed example: Solana Devnet not configured"
+        );
+        // The example's second entry carries two remote pools — both must be registered byte-for-byte.
+        assertEq(
+            pool.getRemotePools(helperConfig.getPlumeTestnetConfig().chainSelector).length,
+            2,
+            "committed example: Plume remote pool count mismatch"
+        );
     }
 
     function _buildInputJson() internal view returns (string memory) {

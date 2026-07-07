@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.24;
 
-import {Script, console} from "forge-std/Script.sol";
+import {console} from "forge-std/Script.sol";
 import {HelperConfig} from "../../HelperConfig.s.sol";
+import {CctActions} from "../../../src/actions/CctActions.sol";
+import {EoaExecutor} from "../../../src/base/EoaExecutor.s.sol";
 import {IOwnable} from "@chainlink/contracts/src/v0.8/shared/interfaces/IOwnable.sol";
 import {
     IAccessControlDefaultAdminRules
@@ -45,7 +47,7 @@ import {Ownable2Step} from "@openzeppelin/contracts@5.3.0/access/Ownable2Step.so
  *
  * If ENTITY_TYPE is omitted, the contract at ADDRESS is treated as a generic IOwnable (same as tokenPool/poolHooks/lockBox).
  */
-contract TransferOwnership is Script {
+contract TransferOwnership is EoaExecutor {
     HelperConfig public helperConfig;
 
     function _eq(string memory a, string memory b) internal pure returns (bool) {
@@ -134,17 +136,15 @@ contract TransferOwnership is Script {
         console.log(string.concat("  Current Owner: ", vm.toString(currentOwner)));
         console.log(string.concat("  New Owner:     ", vm.toString(newOwner)));
 
-        vm.startBroadcast();
-
-        (, address broadcaster,) = vm.readCallers();
-        console.log(string.concat("  Signer:        ", vm.toString(broadcaster)));
+        address signer = broadcaster();
+        console.log(string.concat("  Signer:        ", vm.toString(signer)));
         console.log("");
 
         require(
-            currentOwner == broadcaster,
+            currentOwner == signer,
             string.concat(
                 "Signer (",
-                vm.toString(broadcaster),
+                vm.toString(signer),
                 ") is not the current ",
                 _entityActionLabel(entityType),
                 " owner (",
@@ -156,10 +156,8 @@ contract TransferOwnership is Script {
         console.log(
             string.concat("\n[Step 1] Transferring ", _entityActionLabel(entityType), " ownership on ", chainName)
         );
-        entity.transferOwnership(newOwner);
+        executeCalls(CctActions.transferOwnership(entityAddress, newOwner));
         console.log(string.concat(unicode"✅ ", label, " ownership transfer initiated successfully!"));
-
-        vm.stopBroadcast();
 
         console.log("");
         console.log("========================================");
@@ -250,18 +248,16 @@ contract TransferOwnership is Script {
         }
         console.log(string.concat("  New Owner:     ", vm.toString(newOwner)));
 
-        vm.startBroadcast();
-
-        (, address broadcaster,) = vm.readCallers();
-        console.log(string.concat("  Signer:        ", vm.toString(broadcaster)));
+        address signer = broadcaster();
+        console.log(string.concat("  Signer:        ", vm.toString(signer)));
         console.log("");
 
         if (isCrossChainToken || isOwnable2Step || isOwnable) {
             require(
-                currentOwner == broadcaster,
+                currentOwner == signer,
                 string.concat(
                     "Signer (",
-                    vm.toString(broadcaster),
+                    vm.toString(signer),
                     ") is not the current token owner/admin (",
                     vm.toString(currentOwner),
                     "). Only the current owner/admin can initiate an ownership transfer."
@@ -271,11 +267,11 @@ contract TransferOwnership is Script {
 
         if (isCrossChainToken) {
             console.log(string.concat("\n[Step 1] Initiating admin transfer (CrossChainToken) on ", chainName));
-            IAccessControlDefaultAdminRules(tokenAddress).beginDefaultAdminTransfer(newOwner);
+            executeCalls(CctActions.beginDefaultAdminTransfer(tokenAddress, newOwner));
             console.log(unicode"✅ Admin transfer initiated! New owner must run AcceptOwnership.");
         } else if (isOwnable2Step || isOwnable) {
             console.log(string.concat("\n[Step 1] Transferring token ownership on ", chainName));
-            IOwnable(tokenAddress).transferOwnership(newOwner);
+            executeCalls(CctActions.transferOwnership(tokenAddress, newOwner));
             if (isOwnable2Step) {
                 console.log(unicode"✅ Ownership transfer initiated! New owner must run AcceptOwnership.");
             } else {
@@ -284,20 +280,18 @@ contract TransferOwnership is Script {
                 );
             }
         } else {
-            // Old BurnMintERC20 v1: plain AccessControl — grant to new admin, revoke from self, atomically.
+            // Old BurnMintERC20 v1: plain AccessControl — grant to new admin, revoke from self, atomically
+            // (one action-layer batch: grant first, then revoke).
             bytes32 adminRole = bytes32(0); // DEFAULT_ADMIN_ROLE is always bytes32(0)
             require(
-                IAccessControl(tokenAddress).hasRole(adminRole, broadcaster),
-                string.concat("Signer (", vm.toString(broadcaster), ") does not have DEFAULT_ADMIN_ROLE on this token.")
+                IAccessControl(tokenAddress).hasRole(adminRole, signer),
+                string.concat("Signer (", vm.toString(signer), ") does not have DEFAULT_ADMIN_ROLE on this token.")
             );
             console.log(string.concat("\n[Step 1] Granting DEFAULT_ADMIN_ROLE to new owner on ", chainName));
-            IAccessControl(tokenAddress).grantRole(adminRole, newOwner);
             console.log(string.concat("[Step 2] Revoking DEFAULT_ADMIN_ROLE from current admin on ", chainName));
-            IAccessControl(tokenAddress).revokeRole(adminRole, broadcaster);
+            executeCalls(CctActions.handOffRole(tokenAddress, adminRole, newOwner, signer));
             console.log(unicode"✅ Admin role transferred atomically! No accept step required.");
         }
-
-        vm.stopBroadcast();
 
         console.log("");
         console.log("========================================");

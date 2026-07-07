@@ -1,15 +1,14 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.24;
 
-import {Script, console} from "forge-std/Script.sol";
+import {console} from "forge-std/Script.sol";
 import {HelperConfig} from "../HelperConfig.s.sol"; // Network configuration helper
-import {
-    RegistryModuleOwnerCustom
-} from "@chainlink/contracts-ccip/contracts/tokenAdminRegistry/RegistryModuleOwnerCustom.sol";
 import {IGetCCIPAdmin} from "@chainlink/contracts-ccip/contracts/interfaces/IGetCCIPAdmin.sol";
 import {IOwner} from "@chainlink/contracts-ccip/contracts/interfaces/IOwner.sol";
+import {CctActions} from "../../src/actions/CctActions.sol";
+import {EoaExecutor} from "../../src/base/EoaExecutor.s.sol";
 
-contract ClaimAdmin is Script {
+contract ClaimAdmin is EoaExecutor {
     HelperConfig public helperConfig;
 
     function run() external {
@@ -60,12 +59,8 @@ contract ClaimAdmin is Script {
             }
         }
 
-        vm.startBroadcast();
-
-        (, address broadcaster,) = vm.readCallers();
-
         // Get CCIP admin address from environment variable (defaults to the EOA broadcasting the transaction)
-        address ccipAdminAddress = vm.envOr("CCIP_ADMIN_ADDRESS", broadcaster);
+        address ccipAdminAddress = vm.envOr("CCIP_ADMIN_ADDRESS", broadcaster());
 
         console.log("Claim Admin Parameters:");
         console.log(string.concat("  Token:                        ", vm.toString(tokenAddress)));
@@ -77,18 +72,17 @@ contract ClaimAdmin is Script {
 
         require(currentAdmin == ccipAdminAddress, "Admin of token doesn't match the expected admin address");
 
-        RegistryModuleOwnerCustom registryContract = RegistryModuleOwnerCustom(registryModuleOwnerCustom);
-
+        // Build the claim through the shared action layer and broadcast it as an EOA.
+        CctActions.Call[] memory calls;
         if (useCCIPAdmin) {
             console.log(string.concat("\n[Step 1] Claiming admin for token via getCCIPAdmin() on ", chainName));
-            registryContract.registerAdminViaGetCCIPAdmin(tokenAddress);
+            calls = CctActions.registerAdminViaGetCCIPAdmin(registryModuleOwnerCustom, tokenAddress);
         } else {
             console.log(string.concat("\n[Step 1] Claiming admin for token via owner() on ", chainName));
-            registryContract.registerAdminViaOwner(tokenAddress);
+            calls = CctActions.registerAdminViaOwner(registryModuleOwnerCustom, tokenAddress);
         }
+        executeCalls(calls);
         console.log(unicode"✅ Admin claimed successfully!");
-
-        vm.stopBroadcast();
 
         console.log("");
         console.log("========================================");

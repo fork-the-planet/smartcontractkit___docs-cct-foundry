@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.24;
 
-import {Script, console} from "forge-std/Script.sol";
+import {console} from "forge-std/Script.sol";
 import {HelperConfig} from "../HelperConfig.s.sol"; // Network configuration helper
 import {TokenAdminRegistry} from "@chainlink/contracts-ccip/contracts/tokenAdminRegistry/TokenAdminRegistry.sol";
+import {CctActions} from "../../src/actions/CctActions.sol";
+import {EoaExecutor} from "../../src/base/EoaExecutor.s.sol";
 
-contract SetPool is Script {
+contract SetPool is EoaExecutor {
     HelperConfig public helperConfig;
 
     function run() external {
@@ -62,13 +64,9 @@ contract SetPool is Script {
         console.log(string.concat("  Token Administrator:          ", vm.toString(tokenAdministratorAddress)));
         console.log("");
 
-        vm.startBroadcast();
-
         console.log(string.concat("\n[Step 1] Setting pool for token on ", chainName));
-        tokenAdminRegistryContract.setPool(tokenAddress, poolAddress);
+        executeCalls(CctActions.setPool(config.tokenAdminRegistry, tokenAddress, poolAddress));
         console.log(unicode"✅ Pool set successfully!");
-
-        vm.stopBroadcast();
 
         console.log("");
         console.log("========================================");
