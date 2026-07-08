@@ -22,7 +22,7 @@
       }
     },
     {
-      "destChain": "ARBITRUM_SEPOLIA",
+      "destChain": "PLUME_TESTNET",
       "destPools": [
         "0x0000000000000000000000000000000000000003",
         "0x0000000000000000000000000000000000000004"

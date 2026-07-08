@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.24;
 
-import {Script, console} from "forge-std/Script.sol";
+import {console} from "forge-std/Script.sol";
 import {HelperConfig} from "../HelperConfig.s.sol";
 import {TokenAdminRegistry} from "@chainlink/contracts-ccip/contracts/tokenAdminRegistry/TokenAdminRegistry.sol";
+import {CctActions} from "../../src/actions/CctActions.sol";
+import {EoaExecutor} from "../../src/base/EoaExecutor.s.sol";
 
 /**
  * @notice Initiates a transfer of the token admin role to a new address.
@@ -19,7 +21,7 @@ import {TokenAdminRegistry} from "@chainlink/contracts-ccip/contracts/tokenAdmin
  *   NEW_ADMIN=0xNewAdminAddress forge script script/setup/TransferTokenAdminRole.s.sol \
  *     --rpc-url $ETHEREUM_SEPOLIA_RPC_URL --account $KEYSTORE_NAME --broadcast
  */
-contract TransferTokenAdminRole is Script {
+contract TransferTokenAdminRole is EoaExecutor {
     HelperConfig public helperConfig;
 
     function run() external {
@@ -66,10 +68,8 @@ contract TransferTokenAdminRole is Script {
         console.log(string.concat("  Pending Administrator:        ", vm.toString(pendingAdmin)));
         console.log(string.concat("  New Admin:                    ", vm.toString(newAdmin)));
 
-        vm.startBroadcast();
-
-        (, address broadcaster,) = vm.readCallers();
-        console.log(string.concat("  Signer:                       ", vm.toString(broadcaster)));
+        address signer = broadcaster();
+        console.log(string.concat("  Signer:                       ", vm.toString(signer)));
         console.log("");
 
         require(
@@ -85,10 +85,10 @@ contract TransferTokenAdminRole is Script {
         );
 
         require(
-            currentAdmin == broadcaster,
+            currentAdmin == signer,
             string.concat(
                 "Signer (",
-                vm.toString(broadcaster),
+                vm.toString(signer),
                 ") is not the current administrator (",
                 vm.toString(currentAdmin),
                 "). Only the current admin can transfer the role."
@@ -96,10 +96,8 @@ contract TransferTokenAdminRole is Script {
         );
 
         console.log(string.concat("\n[Step 1] Transferring admin role for token on ", chainName));
-        tokenAdminRegistryContract.transferAdminRole(tokenAddress, newAdmin);
+        executeCalls(CctActions.transferAdminRole(config.tokenAdminRegistry, tokenAddress, newAdmin));
         console.log(unicode"✅ Admin role transfer initiated successfully!");
-
-        vm.stopBroadcast();
 
         console.log("");
         console.log("========================================");

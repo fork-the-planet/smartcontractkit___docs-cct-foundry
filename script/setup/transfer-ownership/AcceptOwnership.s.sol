@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.24;
 
-import {Script, console} from "forge-std/Script.sol";
+import {console} from "forge-std/Script.sol";
 import {HelperConfig} from "../../HelperConfig.s.sol";
+import {CctActions} from "../../../src/actions/CctActions.sol";
+import {EoaExecutor} from "../../../src/base/EoaExecutor.s.sol";
 import {IOwnable} from "@chainlink/contracts/src/v0.8/shared/interfaces/IOwnable.sol";
 import {
     IAccessControlDefaultAdminRules
@@ -43,7 +45,7 @@ import {Ownable2Step} from "@openzeppelin/contracts@5.3.0/access/Ownable2Step.so
  *
  * If ENTITY_TYPE is omitted, the contract at ADDRESS is treated as a generic IOwnable (same as tokenPool/poolHooks/lockBox).
  */
-contract AcceptOwnership is Script {
+contract AcceptOwnership is EoaExecutor {
     HelperConfig public helperConfig;
 
     function _eq(string memory a, string memory b) internal pure returns (bool) {
@@ -127,18 +129,14 @@ contract AcceptOwnership is Script {
         console.log(string.concat("  ", _padRight(string.concat(label, ":"), 14), " ", vm.toString(entityAddress)));
         console.log(string.concat("  Current Owner: ", vm.toString(currentOwner)));
 
-        vm.startBroadcast();
-
-        (, address broadcaster,) = vm.readCallers();
-        console.log(string.concat("  Signer:        ", vm.toString(broadcaster)));
+        address signer = broadcaster();
+        console.log(string.concat("  Signer:        ", vm.toString(signer)));
         console.log("");
 
         console.log(string.concat("\n[Step 1] Accepting ", _entityActionLabel(entityType), " ownership on ", chainName));
         // acceptOwnership reverts on-chain if the signer is not the pending owner
-        entity.acceptOwnership();
+        executeCalls(CctActions.acceptOwnership(entityAddress));
         console.log(unicode"✅ Ownership accepted successfully!");
-
-        vm.stopBroadcast();
 
         console.log("");
         console.log("========================================");
@@ -151,7 +149,7 @@ contract AcceptOwnership is Script {
                 helperConfig.getExplorerUrl(chainId, "/address/", entityAddress)
             )
         );
-        console.log(string.concat("New Owner:  ", vm.toString(broadcaster)));
+        console.log(string.concat("New Owner:  ", vm.toString(signer)));
         console.log("========================================");
         console.log("");
     }
@@ -213,31 +211,27 @@ contract AcceptOwnership is Script {
         console.log(string.concat("  Token:         ", vm.toString(tokenAddress)));
         console.log(string.concat("  Current Owner: ", vm.toString(currentOwner)));
 
-        vm.startBroadcast();
-
-        (, address broadcaster,) = vm.readCallers();
-        console.log(string.concat("  Signer:        ", vm.toString(broadcaster)));
+        address signer = broadcaster();
+        console.log(string.concat("  Signer:        ", vm.toString(signer)));
         console.log("");
 
         if (isCrossChainToken) {
             console.log(string.concat("\n[Step 1] Accepting admin transfer (CrossChainToken) on ", chainName));
             // acceptDefaultAdminTransfer reverts if signer is not the pending admin
-            IAccessControlDefaultAdminRules(tokenAddress).acceptDefaultAdminTransfer();
+            executeCalls(CctActions.acceptDefaultAdminTransfer(tokenAddress));
         } else {
             console.log(string.concat("\n[Step 1] Accepting token ownership on ", chainName));
             // acceptOwnership reverts on-chain if the signer is not the pending owner (or if plain Ownable)
-            IOwnable(tokenAddress).acceptOwnership();
+            executeCalls(CctActions.acceptOwnership(tokenAddress));
         }
         console.log(unicode"✅ Token ownership accepted successfully!");
-
-        vm.stopBroadcast();
 
         console.log("");
         console.log("========================================");
         console.log(string.concat(unicode"✅ Token Ownership Accepted on ", chainName, "!"));
         console.log("========================================");
         console.log(string.concat("Token:      ", helperConfig.getExplorerUrl(chainId, "/address/", tokenAddress)));
-        console.log(string.concat("New Owner:  ", vm.toString(broadcaster)));
+        console.log(string.concat("New Owner:  ", vm.toString(signer)));
         console.log("========================================");
         console.log("");
     }
