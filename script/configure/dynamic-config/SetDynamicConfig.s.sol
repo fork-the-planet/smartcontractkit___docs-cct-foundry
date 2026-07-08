@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.24;
 
-import {Script, console} from "forge-std/Script.sol";
+import {console} from "forge-std/Script.sol";
 import {HelperConfig} from "../../HelperConfig.s.sol";
 import {TokenPool} from "@chainlink/contracts-ccip/contracts/pools/TokenPool.sol";
+import {CctActions} from "../../../src/actions/CctActions.sol";
+import {EoaExecutor} from "../../../src/base/EoaExecutor.s.sol";
 
 /// @notice Updates the dynamic configuration of a TokenPool (router, rateLimitAdmin, feeAdmin).
 ///
@@ -20,7 +22,7 @@ import {TokenPool} from "@chainlink/contracts-ccip/contracts/pools/TokenPool.sol
 ///   RATE_LIMIT_ADMIN=0xYourRateLimitAdminAddress \
 ///   FEE_ADMIN=0xYourFeeAdminAddress \
 ///   forge script script/configure/dynamic-config/SetDynamicConfig.s.sol --rpc-url $ETHEREUM_SEPOLIA_RPC_URL --account <KEYSTORE_NAME> --broadcast
-contract SetDynamicConfig is Script {
+contract SetDynamicConfig is EoaExecutor {
     HelperConfig public helperConfig;
 
     function run() external {
@@ -61,14 +63,12 @@ contract SetDynamicConfig is Script {
         console.log(string.concat("  Fee Admin:                    ", vm.toString(currentFeeAdmin)));
         console.log("");
 
-        vm.startBroadcast();
-
         // Defaults: env var → current on-chain value → broadcaster (as last resort if unset)
-        (, address broadcaster,) = vm.readCallers();
+        address broadcasterAddr = broadcaster();
         address router = vm.envOr("ROUTER", currentRouter);
         address rateLimitAdmin =
-            vm.envOr("RATE_LIMIT_ADMIN", currentRateLimitAdmin != address(0) ? currentRateLimitAdmin : broadcaster);
-        address feeAdmin = vm.envOr("FEE_ADMIN", currentFeeAdmin != address(0) ? currentFeeAdmin : broadcaster);
+            vm.envOr("RATE_LIMIT_ADMIN", currentRateLimitAdmin != address(0) ? currentRateLimitAdmin : broadcasterAddr);
+        address feeAdmin = vm.envOr("FEE_ADMIN", currentFeeAdmin != address(0) ? currentFeeAdmin : broadcasterAddr);
 
         console.log("New Configuration:");
         console.log(string.concat("  Router:                       ", vm.toString(router)));
@@ -77,9 +77,7 @@ contract SetDynamicConfig is Script {
         console.log("");
         console.log(string.concat("[Step 1] Setting dynamic config on ", chainName));
 
-        tokenPool.setDynamicConfig(router, rateLimitAdmin, feeAdmin);
-
-        vm.stopBroadcast();
+        executeCalls(CctActions.setDynamicConfig(tokenPoolAddress, router, rateLimitAdmin, feeAdmin));
 
         console.log(unicode"✅ Dynamic config updated successfully!");
         console.log("");

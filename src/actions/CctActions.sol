@@ -11,6 +11,25 @@ import {
     IAccessControlDefaultAdminRules
 } from "@openzeppelin/contracts@5.3.0/access/extensions/IAccessControlDefaultAdminRules.sol";
 import {IAccessControl} from "@openzeppelin/contracts@5.3.0/access/IAccessControl.sol";
+import {RateLimiter} from "@chainlink/contracts-ccip/contracts/libraries/RateLimiter.sol";
+import {IAdvancedPoolHooks} from "@chainlink/contracts-ccip/contracts/interfaces/IAdvancedPoolHooks.sol";
+import {AdvancedPoolHooks} from "@chainlink/contracts-ccip/contracts/pools/AdvancedPoolHooks.sol";
+import {ERC20LockBox} from "@chainlink/contracts-ccip/contracts/pools/ERC20LockBox.sol";
+import {AuthorizedCallers} from "@chainlink/contracts/src/v0.8/shared/access/AuthorizedCallers.sol";
+import {IBurnMintERC20} from "@chainlink/contracts-ccip/contracts/interfaces/IBurnMintERC20.sol";
+import {IERC20} from "@openzeppelin/contracts@5.3.0/token/ERC20/IERC20.sol";
+
+/// @notice Minimal view of the v1.x TokenPool rate-limiter setter (`setChainRateLimiterConfig`), which v2
+///         pools replaced with `setRateLimitConfig(RateLimitConfigArgs[])`. Declared here so the action
+///         layer can build the v1 setter's calldata without importing a script-side utility. The function
+///         selector is identical wherever the signature is declared, so builder calldata stays canonical.
+interface IRateLimiterV1 {
+    function setChainRateLimiterConfig(
+        uint64 remoteChainSelector,
+        RateLimiter.Config memory outboundConfig,
+        RateLimiter.Config memory inboundConfig
+    ) external;
+}
 
 /// @title CctActions
 /// @notice The shared action layer: every CCT write operation is defined here exactly once, as a pure
@@ -169,6 +188,191 @@ library CctActions {
         returns (Call[] memory)
     {
         return concat(grantRole(target, role, newHolder), revokeRole(target, role, oldHolder));
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Rate limiting (version-detected dispatch)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// @notice v1.x rate-limit setter: `setChainRateLimiterConfig(selector, outbound, inbound)`. v1 pools
+    ///         carry a single (standard-finality) bucket per lane, so there is no fast-finality parameter.
+    function setChainRateLimiterConfig(
+        address pool,
+        uint64 remoteChainSelector,
+        RateLimiter.Config memory outbound,
+        RateLimiter.Config memory inbound
+    ) internal pure returns (Call[] memory) {
+        return _one(
+            pool, abi.encodeCall(IRateLimiterV1.setChainRateLimiterConfig, (remoteChainSelector, outbound, inbound))
+        );
+    }
+
+    /// @notice v2.0+ rate-limit setter: `setRateLimitConfig(RateLimitConfigArgs[])`. The args carry the
+    ///         `fastFinality` flag, so one call can target either the standard or the fast-finality bucket.
+    function setRateLimitConfig(address pool, TokenPool.RateLimitConfigArgs[] memory args)
+        internal
+        pure
+        returns (Call[] memory)
+    {
+        return _one(pool, abi.encodeCall(TokenPool.setRateLimitConfig, (args)));
+    }
+
+    /// @notice Version-detected rate-limit dispatch: routes a single-lane update to the v1 setter
+    ///         (`setChainRateLimiterConfig`) or the v2 setter (`setRateLimitConfig`) based on `isV2` — the
+    ///         same capability the docs-team `RateLimiterUtils.isV2Pool` probe detects script-side. `isV2`
+    ///         stays a parameter (like the claim-path probe) so the builder remains pure. `fastFinality` is
+    ///         ignored on v1 (v1 pools have only the standard bucket).
+    function setRateLimits(
+        address pool,
+        bool isV2,
+        uint64 remoteChainSelector,
+        bool fastFinality,
+        RateLimiter.Config memory outbound,
+        RateLimiter.Config memory inbound
+    ) internal pure returns (Call[] memory) {
+        if (isV2) {
+            TokenPool.RateLimitConfigArgs[] memory args = new TokenPool.RateLimitConfigArgs[](1);
+            args[0] = TokenPool.RateLimitConfigArgs({
+                remoteChainSelector: remoteChainSelector,
+                fastFinality: fastFinality,
+                outboundRateLimiterConfig: outbound,
+                inboundRateLimiterConfig: inbound
+            });
+            return setRateLimitConfig(pool, args);
+        }
+        return setChainRateLimiterConfig(pool, remoteChainSelector, outbound, inbound);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Remote pools / dynamic config / finality / fee config (pool configuration)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// @notice Add a remote pool address for a supported remote chain. `encodedRemotePool` is the
+    ///         chain-family-encoded address (EVM: `abi.encode(address)`); the action layer passes it through.
+    function addRemotePool(address pool, uint64 remoteChainSelector, bytes memory encodedRemotePool)
+        internal
+        pure
+        returns (Call[] memory)
+    {
+        return _one(pool, abi.encodeCall(TokenPool.addRemotePool, (remoteChainSelector, encodedRemotePool)));
+    }
+
+    /// @notice Remove a remote pool address for a remote chain.
+    function removeRemotePool(address pool, uint64 remoteChainSelector, bytes memory encodedRemotePool)
+        internal
+        pure
+        returns (Call[] memory)
+    {
+        return _one(pool, abi.encodeCall(TokenPool.removeRemotePool, (remoteChainSelector, encodedRemotePool)));
+    }
+
+    /// @notice Update the pool's dynamic config (router, rateLimitAdmin, feeAdmin).
+    function setDynamicConfig(address pool, address router, address rateLimitAdmin, address feeAdmin)
+        internal
+        pure
+        returns (Call[] memory)
+    {
+        return _one(pool, abi.encodeCall(TokenPool.setDynamicConfig, (router, rateLimitAdmin, feeAdmin)));
+    }
+
+    /// @notice Set the pool's allowed fast-finality config (a `bytes4` FinalityCodec value). v2.0+ only.
+    function setAllowedFinalityConfig(address pool, bytes4 finalityConfig) internal pure returns (Call[] memory) {
+        return _one(pool, abi.encodeCall(TokenPool.setAllowedFinalityConfig, (finalityConfig)));
+    }
+
+    /// @notice Apply per-lane token-transfer fee-config updates (add/update `feeConfigArgs`, disable
+    ///         `removeSelectors`). v2.0+ only.
+    function applyTokenTransferFeeConfigUpdates(
+        address pool,
+        TokenPool.TokenTransferFeeConfigArgs[] memory feeConfigArgs,
+        uint64[] memory removeSelectors
+    ) internal pure returns (Call[] memory) {
+        return _one(
+            pool, abi.encodeCall(TokenPool.applyTokenTransferFeeConfigUpdates, (feeConfigArgs, removeSelectors))
+        );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Hooks / access control (allowlist, authorized callers)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// @notice Point a v2 pool at a new `AdvancedPoolHooks` contract.
+    function updateAdvancedPoolHooks(address pool, address newHook) internal pure returns (Call[] memory) {
+        return _one(pool, abi.encodeCall(TokenPool.updateAdvancedPoolHooks, (IAdvancedPoolHooks(newHook))));
+    }
+
+    /// @notice Apply allowlist updates (`removes`, `adds`) on an `AdvancedPoolHooks` (v2) or a v1 pool —
+    ///         both expose the identical `applyAllowListUpdates(address[],address[])` selector.
+    /// @dev IMMUTABILITY TRAP: on `AdvancedPoolHooks`, `allowlistEnabled` is fixed at deploy time from
+    ///      whether the INITIAL allowlist was non-empty. If the hooks were deployed with an empty allowlist,
+    ///      allowlisting is permanently disabled and this call reverts `AllowListNotEnabled()` — enabling
+    ///      allowlisting later requires deploying a NEW hooks contract with a non-empty initial allowlist.
+    function applyAllowListUpdates(address target, address[] memory removes, address[] memory adds)
+        internal
+        pure
+        returns (Call[] memory)
+    {
+        return _one(target, abi.encodeCall(AdvancedPoolHooks.applyAllowListUpdates, (removes, adds)));
+    }
+
+    /// @notice Apply authorized-caller updates on any `AuthorizedCallers` contract — the shared base of
+    ///         both `AdvancedPoolHooks` and `ERC20LockBox`, so one builder serves both variants.
+    function applyAuthorizedCallerUpdates(address target, address[] memory adds, address[] memory removes)
+        internal
+        pure
+        returns (Call[] memory)
+    {
+        return _one(
+            target,
+            abi.encodeCall(
+                AuthorizedCallers.applyAuthorizedCallerUpdates,
+                (AuthorizedCallers.AuthorizedCallerArgs({addedCallers: adds, removedCallers: removes}))
+            )
+        );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Operations (mint / lockbox deposit-withdraw / fee-token withdrawal / approve)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// @notice Mint `amount` of a burn/mint token to `to`. The executing account must hold the mint role.
+    function mint(address token, address to, uint256 amount) internal pure returns (Call[] memory) {
+        return _one(token, abi.encodeCall(IBurnMintERC20.mint, (to, amount)));
+    }
+
+    /// @notice ERC20 `approve(spender, amount)` — the allowance step `DepositToLockBox` needs before a
+    ///         lockbox deposit pulls the tokens.
+    function approve(address token, address spender, uint256 amount) internal pure returns (Call[] memory) {
+        return _one(token, abi.encodeCall(IERC20.approve, (spender, amount)));
+    }
+
+    /// @notice Deposit `amount` of `token` into an `ERC20LockBox` as ONE batch: `approve(lockbox, amount)`
+    ///         on the token, then `deposit(token, 0, amount)` on the lockbox (the unused remoteChainSelector
+    ///         param is 0 per v2.0 semantics). The executing account must be an authorized lockbox caller.
+    function lockboxDeposit(address lockbox, address token, uint256 amount) internal pure returns (Call[] memory) {
+        return concat(
+            approve(token, lockbox, amount),
+            _one(lockbox, abi.encodeCall(ERC20LockBox.deposit, (token, uint64(0), amount)))
+        );
+    }
+
+    /// @notice Withdraw `amount` of `token` from an `ERC20LockBox` to `recipient` (`remoteChainSelector`
+    ///         param is 0, unused). The executing account must be an authorized lockbox caller.
+    function lockboxWithdraw(address lockbox, address token, uint256 amount, address recipient)
+        internal
+        pure
+        returns (Call[] memory)
+    {
+        return _one(lockbox, abi.encodeCall(ERC20LockBox.withdraw, (token, uint64(0), amount, recipient)));
+    }
+
+    /// @notice Withdraw accrued fee-token balances from a v2 pool to `recipient`. Owner/feeAdmin gated.
+    function withdrawFeeTokens(address pool, address[] memory feeTokens, address recipient)
+        internal
+        pure
+        returns (Call[] memory)
+    {
+        return _one(pool, abi.encodeCall(TokenPool.withdrawFeeTokens, (feeTokens, recipient)));
     }
 
     // ─────────────────────────────────────────────────────────────────────────

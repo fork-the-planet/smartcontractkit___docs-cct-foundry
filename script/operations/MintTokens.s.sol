@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.24;
 
-import {Script, console} from "forge-std/Script.sol";
+import {console} from "forge-std/Script.sol";
 import {HelperConfig} from "../HelperConfig.s.sol"; // Network configuration helper
 import {CrossChainToken} from "@chainlink/contracts-ccip/contracts/tokens/CrossChainToken.sol";
+import {CctActions} from "../../src/actions/CctActions.sol";
+import {EoaExecutor} from "../../src/base/EoaExecutor.s.sol";
 
-contract MintTokens is Script {
+contract MintTokens is EoaExecutor {
     HelperConfig public helperConfig;
 
     function run() external {
@@ -50,11 +52,8 @@ contract MintTokens is Script {
         console.log(string.concat("  Token Symbol:                 ", token.symbol()));
         console.log(string.concat("  Amount:                       ", vm.toString(amount)));
 
-        vm.startBroadcast();
-
-        (, address broadcaster,) = vm.readCallers();
         // Get receiver address from environment variable or use broadcaster by default
-        address receiverAddress = vm.envOr("MINT_RECEIVER", broadcaster);
+        address receiverAddress = vm.envOr("MINT_RECEIVER", broadcaster());
         console.log(string.concat("  Receiver:                     ", vm.toString(receiverAddress)));
         console.log("");
 
@@ -63,10 +62,8 @@ contract MintTokens is Script {
                 "\n[Step 1] Minting ", vm.toString(amount), " ", token.symbol(), " to ", vm.toString(receiverAddress)
             )
         );
-        token.mint(receiverAddress, amount);
+        executeCalls(CctActions.mint(tokenAddress, receiverAddress, amount));
         console.log(unicode"✅ Tokens minted successfully!");
-
-        vm.stopBroadcast();
 
         uint256 newBalance = token.balanceOf(receiverAddress);
 

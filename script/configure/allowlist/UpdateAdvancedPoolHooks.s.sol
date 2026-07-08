@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.24;
 
-import {Script, console} from "forge-std/Script.sol";
+import {console} from "forge-std/Script.sol";
 import {HelperConfig} from "../../HelperConfig.s.sol";
-import {TokenPool} from "@chainlink/contracts-ccip/contracts/pools/TokenPool.sol";
-import {IAdvancedPoolHooks} from "@chainlink/contracts-ccip/contracts/interfaces/IAdvancedPoolHooks.sol";
+import {CctActions} from "../../../src/actions/CctActions.sol";
+import {EoaExecutor} from "../../../src/base/EoaExecutor.s.sol";
 
 /**
  * @title UpdateAdvancedPoolHooks
@@ -14,7 +14,7 @@ import {IAdvancedPoolHooks} from "@chainlink/contracts-ccip/contracts/interfaces
  * Usage:
  *   TOKEN_POOL=0x... NEW_HOOK=0x... forge script script/configure/allowlist/UpdateAdvancedPoolHooks.s.sol --rpc-url $ETHEREUM_SEPOLIA_RPC_URL --account $KEYSTORE_NAME --broadcast
  */
-contract UpdateAdvancedPoolHooks is Script {
+contract UpdateAdvancedPoolHooks is EoaExecutor {
     HelperConfig public helperConfig;
 
     function run() external {
@@ -46,22 +46,8 @@ contract UpdateAdvancedPoolHooks is Script {
         console.log(string.concat("New Pool Hooks: ", vm.toString(newHookAddress)));
         console.log("");
 
-        vm.startBroadcast();
-        TokenPool tokenPool = TokenPool(tokenPoolAddress);
-        try tokenPool.updateAdvancedPoolHooks(IAdvancedPoolHooks(newHookAddress)) {
-            vm.stopBroadcast();
-            console.log(unicode"✅ AdvancedPoolHooks updated successfully!");
-        } catch (bytes memory err) {
-            vm.stopBroadcast();
-            console.log(unicode"❌ Error: updateAdvancedPoolHooks() reverted.");
-            console.log("   Raw revert data:");
-            console.logBytes(err);
-            console.log(
-                "   If the error is OnlyCallableByOwner(), ensure you are broadcasting with the pool owner's account."
-            );
-            console.log("   If the function selector is missing, the pool may be v1 (requires TokenPool v2.0+).");
-            revert("updateAdvancedPoolHooks() reverted - see raw error above");
-        }
+        executeCalls(CctActions.updateAdvancedPoolHooks(tokenPoolAddress, newHookAddress));
+        console.log(unicode"✅ AdvancedPoolHooks updated successfully!");
         console.log("");
         console.log("========================================");
         console.log(string.concat(unicode"✅ Pool hooks updated on ", chainName, "!"));

@@ -5,6 +5,7 @@ import {Test} from "forge-std/Test.sol";
 import {HelperConfig} from "../script/HelperConfig.s.sol";
 import {DeployToken} from "../script/deploy/DeployToken.s.sol";
 import {DeployBurnMintTokenPool} from "../script/deploy/DeployBurnMintTokenPool.s.sol";
+import {CctActions} from "../src/actions/CctActions.sol";
 
 /// @title BaseForkTest
 /// @notice Shared base for Ethereum Sepolia fork tests.
@@ -87,5 +88,20 @@ abstract contract BaseForkTest is Test {
         vm.startBroadcast();
         (, broadcaster,) = vm.readCallers();
         vm.stopBroadcast();
+    }
+
+    /// @dev Executes a `CctActions.Call[]` in order, each pranked as `sender` — the exact `Call[]` the
+    /// refactored scripts hand to `EoaExecutor.executeCalls`, so a test proves the action-layer calldata
+    /// against on-chain getters. Reverts (with the underlying reason) on the first failing call.
+    function _exec(address sender, CctActions.Call[] memory calls) internal {
+        for (uint256 i = 0; i < calls.length; i++) {
+            vm.prank(sender);
+            (bool ok, bytes memory ret) = calls[i].target.call{value: calls[i].value}(calls[i].data);
+            if (!ok) {
+                assembly {
+                    revert(add(ret, 0x20), mload(ret))
+                }
+            }
+        }
     }
 }

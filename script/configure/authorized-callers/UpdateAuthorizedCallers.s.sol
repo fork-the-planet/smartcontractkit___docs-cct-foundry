@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.24;
 
-import {Script, console} from "forge-std/Script.sol";
+import {console} from "forge-std/Script.sol";
 import {HelperConfig} from "../../HelperConfig.s.sol";
 import {HelperUtils} from "../../utils/HelperUtils.s.sol";
-import {AuthorizedCallers} from "@chainlink/contracts/src/v0.8/shared/access/AuthorizedCallers.sol";
+import {CctActions} from "../../../src/actions/CctActions.sol";
+import {EoaExecutor} from "../../../src/base/EoaExecutor.s.sol";
 
 /**
  * @title UpdateAuthorizedCallers
@@ -21,7 +22,7 @@ import {AuthorizedCallers} from "@chainlink/contracts/src/v0.8/shared/access/Aut
  *   ADD_ADDRESSES    — CSV or JSON array of addresses to add
  *   REMOVE_ADDRESSES — CSV or JSON array of addresses to remove
  */
-contract UpdateAuthorizedCallers is Script {
+contract UpdateAuthorizedCallers is EoaExecutor {
     HelperConfig public helperConfig;
 
     function run() external {
@@ -71,14 +72,7 @@ contract UpdateAuthorizedCallers is Script {
         }
         console.log("");
 
-        vm.startBroadcast();
-
-        AuthorizedCallers(contractAddress)
-            .applyAuthorizedCallerUpdates(
-                AuthorizedCallers.AuthorizedCallerArgs({addedCallers: addCallers, removedCallers: removeCallers})
-            );
-
-        vm.stopBroadcast();
+        executeCalls(CctActions.applyAuthorizedCallerUpdates(contractAddress, addCallers, removeCallers));
 
         console.log("");
         console.log("========================================");

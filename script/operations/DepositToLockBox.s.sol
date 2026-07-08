@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.24;
 
-import {Script, console} from "forge-std/Script.sol";
+import {console} from "forge-std/Script.sol";
 import {HelperConfig} from "../HelperConfig.s.sol";
 import {ERC20LockBox} from "@chainlink/contracts-ccip/contracts/pools/ERC20LockBox.sol";
 import {IERC20} from "@openzeppelin/contracts@5.3.0/token/ERC20/IERC20.sol";
+import {CctActions} from "../../src/actions/CctActions.sol";
+import {EoaExecutor} from "../../src/base/EoaExecutor.s.sol";
 
 /**
  * @title DepositToLockBox
@@ -19,7 +21,7 @@ import {IERC20} from "@openzeppelin/contracts@5.3.0/token/ERC20/IERC20.sol";
  *   LOCK_BOX   — (required) address of the ERC20LockBox contract
  *   AMOUNT     — (optional) amount to deposit (defaults to tokenAmountToTransfer from script/input/token.json)
  */
-contract DepositToLockBox is Script {
+contract DepositToLockBox is EoaExecutor {
     HelperConfig public helperConfig;
 
     function run() external {
@@ -67,31 +69,25 @@ contract DepositToLockBox is Script {
 
         IERC20 token = IERC20(tokenAddress);
 
-        vm.startBroadcast();
-
-        (, address broadcaster,) = vm.readCallers();
+        address depositor = broadcaster();
 
         console.log("Deposit Parameters:");
         console.log(string.concat("  LockBox:                      ", vm.toString(lockBoxAddress)));
         console.log(string.concat("  Token:                        ", vm.toString(tokenAddress)));
-        console.log(string.concat("  Depositor:                    ", vm.toString(broadcaster)));
+        console.log(string.concat("  Depositor:                    ", vm.toString(depositor)));
         console.log(string.concat("  Amount:                       ", vm.toString(amount)));
         console.log("");
 
-        uint256 balanceBefore = token.balanceOf(broadcaster);
+        uint256 balanceBefore = token.balanceOf(depositor);
         require(balanceBefore >= amount, "Insufficient token balance");
 
+        // approve(lockbox, amount) then deposit(token, 0, amount) as one batch through the action layer.
         console.log(string.concat("[Step 1] Approving ", vm.toString(amount), " tokens to LockBox"));
-        token.approve(lockBoxAddress, amount);
-        console.log(unicode"✅ Approval successful!");
-
-        console.log(string.concat("\n[Step 2] Depositing ", vm.toString(amount), " tokens into LockBox"));
-        lockBox.deposit(tokenAddress, 0, amount); // remoteChainSelector is unused, pass 0
+        console.log(string.concat("[Step 2] Depositing ", vm.toString(amount), " tokens into LockBox"));
+        executeCalls(CctActions.lockboxDeposit(lockBoxAddress, tokenAddress, amount));
         console.log(unicode"✅ Deposit successful!");
 
-        vm.stopBroadcast();
-
-        uint256 balanceAfter = token.balanceOf(broadcaster);
+        uint256 balanceAfter = token.balanceOf(depositor);
         uint256 lockBoxBalance = token.balanceOf(lockBoxAddress);
 
         console.log("");

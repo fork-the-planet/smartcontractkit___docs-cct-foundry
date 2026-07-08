@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.24;
 
-import {Script, console} from "forge-std/Script.sol";
+import {console} from "forge-std/Script.sol";
 import {HelperConfig} from "../HelperConfig.s.sol";
 import {HelperUtils} from "../utils/HelperUtils.s.sol";
 import {TokenPool} from "@chainlink/contracts-ccip/contracts/pools/TokenPool.sol";
 import {FeeTokenLogger} from "../utils/FeeTokenLogger.s.sol";
+import {CctActions} from "../../src/actions/CctActions.sol";
+import {EoaExecutor} from "../../src/base/EoaExecutor.s.sol";
 
 /// @notice Withdraws accrued fee token balances from a token pool to a specified recipient.
 ///
@@ -37,7 +39,7 @@ import {FeeTokenLogger} from "../utils/FeeTokenLogger.s.sol";
 ///   RECIPIENT=0xYourAddress \
 ///   FEE_TOKENS="0xFirstFeeToken,0xSecondFeeToken" \
 ///   forge script script/operations/WithdrawFeeTokens.s.sol --rpc-url $ETHEREUM_SEPOLIA_RPC_URL --account <KEYSTORE_NAME> --broadcast
-contract WithdrawFeeTokens is Script {
+contract WithdrawFeeTokens is EoaExecutor {
     HelperConfig public helperConfig;
 
     function run() external {
@@ -104,30 +106,15 @@ contract WithdrawFeeTokens is Script {
         // ── Broadcast ─────────────────────────────────────────────────────
         console.log(string.concat("[Step 1] Withdrawing fee tokens on ", chainName));
 
-        vm.startBroadcast();
-
         // RECIPIENT defaults to the broadcaster (the account signing the transaction).
-        (, address broadcaster,) = vm.readCallers();
-        address recipient = vm.envOr("RECIPIENT", broadcaster);
+        address recipient = vm.envOr("RECIPIENT", broadcaster());
         console.log(string.concat("Recipient:    ", vm.toString(recipient)));
 
         // withdrawFeeTokens() was introduced in TokenPool v2.0.
         // On v1 pools, fee configuration is handled by FeeQuoter and there is no
         // pool-level fee withdrawal mechanism — fees are not accrued by the pool contract.
-        try tokenPool.withdrawFeeTokens(tokensToWithdraw, recipient) {
-            console.log(unicode"✅ Fee tokens withdrawn successfully!");
-        } catch (bytes memory err) {
-            console.log(unicode"❌ Error: withdrawFeeTokens() reverted.");
-            console.log("   Raw revert data:");
-            console.logBytes(err);
-            console.log(
-                "   If the error is OnlyCallableByOwner(), ensure you are broadcasting with the pool owner's account."
-            );
-            console.log("   If the function selector is missing, the pool may be v1 (requires TokenPool v2.0+).");
-            revert("withdrawFeeTokens() reverted - see raw error above");
-        }
-
-        vm.stopBroadcast();
+        executeCalls(CctActions.withdrawFeeTokens(tokenPoolAddress, tokensToWithdraw, recipient));
+        console.log(unicode"✅ Fee tokens withdrawn successfully!");
 
         // ── Footer ─────────────────────────────────────────────────────────
         console.log("");

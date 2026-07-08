@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.24;
 
-import {Script, console} from "forge-std/Script.sol";
+import {console} from "forge-std/Script.sol";
 import {HelperConfig} from "../../HelperConfig.s.sol";
 import {TokenPool} from "@chainlink/contracts-ccip/contracts/pools/TokenPool.sol";
 import {IPoolV2} from "@chainlink/contracts-ccip/contracts/interfaces/IPoolV2.sol";
+import {CctActions} from "../../../src/actions/CctActions.sol";
+import {EoaExecutor} from "../../../src/base/EoaExecutor.s.sol";
 
 /// @notice Applies token transfer fee configuration updates to a token pool on a given destination lane.
 ///
@@ -43,7 +45,7 @@ import {IPoolV2} from "@chainlink/contracts-ccip/contracts/interfaces/IPoolV2.so
 ///   DEST_CHAIN=MANTLE_SEPOLIA \
 ///   DISABLE=true \
 ///   forge script script/configure/fee-config/UpdateTokenTransferFeeConfig.s.sol --rpc-url $ETHEREUM_SEPOLIA_RPC_URL --account <KEYSTORE_NAME> --broadcast
-contract UpdateTokenTransferFeeConfig is Script {
+contract UpdateTokenTransferFeeConfig is EoaExecutor {
     HelperConfig public helperConfig;
 
     function run() external {
@@ -107,23 +109,12 @@ contract UpdateTokenTransferFeeConfig is Script {
             toDisable[0] = destChainSelector;
             TokenPool.TokenTransferFeeConfigArgs[] memory emptyArgs = new TokenPool.TokenTransferFeeConfigArgs[](0);
 
-            vm.startBroadcast();
-
             // applyTokenTransferFeeConfigUpdates() was introduced in TokenPool v2.0.
             // On v1 pools, fee configuration is handled by FeeQuoter and requires
             // a direct request to the Chainlink team — it cannot be modified here.
-            try tokenPool.applyTokenTransferFeeConfigUpdates(emptyArgs, toDisable) {
-                console.log(unicode"✅ Fee config disabled for this lane.");
-                console.log("   The OnRamp will now use FeeQuoter defaults for this destination.");
-            } catch (bytes memory err) {
-                console.log(unicode"❌ Error: applyTokenTransferFeeConfigUpdates() reverted.");
-                console.log("   Raw revert data:");
-                console.logBytes(err);
-                console.log("   If the function selector is missing, the pool may be v1 (requires TokenPool v2.0+).");
-                revert("applyTokenTransferFeeConfigUpdates() reverted - see raw error above");
-            }
-
-            vm.stopBroadcast();
+            executeCalls(CctActions.applyTokenTransferFeeConfigUpdates(tokenPoolAddress, emptyArgs, toDisable));
+            console.log(unicode"✅ Fee config disabled for this lane.");
+            console.log("   The OnRamp will now use FeeQuoter defaults for this destination.");
         } else {
             // ── Read current on-chain config as defaults ───────────────────
             IPoolV2.TokenTransferFeeConfig memory currentConfig;
@@ -169,22 +160,11 @@ contract UpdateTokenTransferFeeConfig is Script {
                 string.concat("[Step 1] Applying fee config for lane to ", helperConfig.getChainName(destChainId))
             );
 
-            vm.startBroadcast();
-
             // applyTokenTransferFeeConfigUpdates() was introduced in TokenPool v2.0.
             // On v1 pools, fee configuration is handled by FeeQuoter and requires
             // a direct request to the Chainlink team — it cannot be modified here.
-            try tokenPool.applyTokenTransferFeeConfigUpdates(args, emptyDisable) {
-                console.log(unicode"✅ Fee config applied successfully!");
-            } catch (bytes memory err) {
-                console.log(unicode"❌ Error: applyTokenTransferFeeConfigUpdates() reverted.");
-                console.log("   Raw revert data:");
-                console.logBytes(err);
-                console.log("   If the function selector is missing, the pool may be v1 (requires TokenPool v2.0+).");
-                revert("applyTokenTransferFeeConfigUpdates() reverted - see raw error above");
-            }
-
-            vm.stopBroadcast();
+            executeCalls(CctActions.applyTokenTransferFeeConfigUpdates(tokenPoolAddress, args, emptyDisable));
+            console.log(unicode"✅ Fee config applied successfully!");
         }
 
         // ── Footer ─────────────────────────────────────────────────────────
