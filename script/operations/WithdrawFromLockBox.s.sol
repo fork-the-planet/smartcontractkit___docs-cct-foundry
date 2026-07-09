@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.24;
 
-import {Script, console} from "forge-std/Script.sol";
+import {console} from "forge-std/Script.sol";
 import {HelperConfig} from "../HelperConfig.s.sol";
 import {ERC20LockBox} from "@chainlink/contracts-ccip/contracts/pools/ERC20LockBox.sol";
 import {IERC20} from "@openzeppelin/contracts@5.3.0/token/ERC20/IERC20.sol";
+import {CctActions} from "../../src/actions/CctActions.sol";
+import {EoaExecutor} from "../../src/base/EoaExecutor.s.sol";
 
 /**
  * @title WithdrawFromLockBox
@@ -20,7 +22,7 @@ import {IERC20} from "@openzeppelin/contracts@5.3.0/token/ERC20/IERC20.sol";
  *   AMOUNT     — (optional) amount to withdraw (defaults to entire lockbox balance)
  *   RECIPIENT  — (optional) address to receive withdrawn tokens (defaults to broadcaster)
  */
-contract WithdrawFromLockBox is Script {
+contract WithdrawFromLockBox is EoaExecutor {
     HelperConfig public helperConfig;
 
     function run() external {
@@ -68,10 +70,7 @@ contract WithdrawFromLockBox is Script {
         require(amount > 0, "Amount must be greater than 0");
         require(amount <= lockBoxBalance, "Amount exceeds lockbox balance");
 
-        vm.startBroadcast();
-
-        (, address broadcaster,) = vm.readCallers();
-        address recipient = vm.envOr("RECIPIENT", broadcaster);
+        address recipient = vm.envOr("RECIPIENT", broadcaster());
 
         console.log("Withdrawal Parameters:");
         console.log(string.concat("  LockBox:                      ", vm.toString(lockBoxAddress)));
@@ -90,10 +89,8 @@ contract WithdrawFromLockBox is Script {
         uint256 recipientBalanceBefore = token.balanceOf(recipient);
 
         console.log(string.concat("[Step 1] Withdrawing ", vm.toString(amount), " tokens from LockBox"));
-        lockBox.withdraw(tokenAddress, 0, amount, recipient); // remoteChainSelector is unused, pass 0
+        executeCalls(CctActions.lockboxWithdraw(lockBoxAddress, tokenAddress, amount, recipient));
         console.log(unicode"✅ Withdrawal successful!");
-
-        vm.stopBroadcast();
 
         uint256 lockBoxBalanceAfter = token.balanceOf(lockBoxAddress);
         uint256 recipientBalanceAfter = token.balanceOf(recipient);

@@ -1,14 +1,11 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.24;
 
-import {Script, console} from "forge-std/Script.sol";
+import {console} from "forge-std/Script.sol";
 import {HelperConfig} from "../../HelperConfig.s.sol";
 import {HelperUtils} from "../../utils/HelperUtils.s.sol";
-import {AdvancedPoolHooks} from "@chainlink/contracts-ccip/contracts/pools/AdvancedPoolHooks.sol";
-
-interface ITokenPoolV1 {
-    function applyAllowListUpdates(address[] calldata removes, address[] calldata adds) external;
-}
+import {CctActions} from "../../../src/actions/CctActions.sol";
+import {EoaExecutor} from "../../../src/base/EoaExecutor.s.sol";
 
 /**
  * @title UpdateAllowList
@@ -19,7 +16,7 @@ interface ITokenPoolV1 {
  *   TOKEN_POOL=0x... POOL_HOOKS=0x... forge script script/configure/allowlist/UpdateAllowList.s.sol --rpc-url $ETHEREUM_SEPOLIA_RPC_URL --account $KEYSTORE_NAME --broadcast
  *   (If POOL_HOOKS is not set, will try to call on pool contract. If not found, throws error with guidance.)
  */
-contract UpdateAllowList is Script {
+contract UpdateAllowList is EoaExecutor {
     HelperConfig public helperConfig;
 
     function run() external {
@@ -56,47 +53,13 @@ contract UpdateAllowList is Script {
         console.log("========================================");
         console.log("");
 
-        vm.startBroadcast();
-        bool success = false;
-        string memory errorMsg = "";
-        if (hooksAddress != address(0)) {
-            // Try to call on AdvancedPoolHooks
-            try AdvancedPoolHooks(hooksAddress).applyAllowListUpdates(removes, adds) {
-                success = true;
-            } catch (bytes memory err) {
-                console.log(unicode"❌ Error: applyAllowListUpdates() reverted on AdvancedPoolHooks.");
-                console.log("   Raw revert data:");
-                console.logBytes(err);
-                console.log(
-                    "   If the error is OnlyCallableByOwner(), ensure you are broadcasting with the hooks owner's account."
-                );
-                errorMsg = unicode"❌ Error: applyAllowListUpdates() reverted - see raw error above.";
-            }
-        } else {
-            // Try to call on TokenPool (v1) via interface
-            try ITokenPoolV1(tokenPoolAddress).applyAllowListUpdates(removes, adds) {
-                success = true;
-            } catch (bytes memory err) {
-                console.log(unicode"❌ Error: applyAllowListUpdates() reverted on TokenPool.");
-                console.log("   Raw revert data:");
-                console.logBytes(err);
-                console.log(
-                    "   If the function selector is not found, you may be using TokenPool v2.0+ which requires AdvancedPoolHooks."
-                );
-                console.log(
-                    "   Deploy AdvancedPoolHooks using DeployAdvancedPoolHooks.s.sol, connect it via UpdateAdvancedPoolHooks.s.sol, then pass its address as POOL_HOOKS."
-                );
-                errorMsg = unicode"❌ Error: applyAllowListUpdates() reverted - see raw error above.";
-            }
-        }
-        vm.stopBroadcast();
+        // Target the AdvancedPoolHooks (v2) when POOL_HOOKS is set, otherwise the pool itself (v1). Both
+        // expose the identical applyAllowListUpdates(address[],address[]) selector, so one builder serves
+        // both. A revert (e.g. OnlyCallableByOwner, or a v2 pool without hooks) bubbles up unchanged.
+        address allowListTarget = hooksAddress != address(0) ? hooksAddress : tokenPoolAddress;
+        executeCalls(CctActions.applyAllowListUpdates(allowListTarget, removes, adds));
 
-        if (success) {
-            console.log(unicode"✅ AllowList updated successfully!");
-        } else {
-            console.log(errorMsg);
-            revert(errorMsg);
-        }
+        console.log(unicode"✅ AllowList updated successfully!");
         console.log("");
         console.log("========================================");
         console.log(string.concat(unicode"✅ Allowlist updated on ", chainName, "!"));

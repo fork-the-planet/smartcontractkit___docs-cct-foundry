@@ -1,13 +1,15 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.24;
 
-import {Script, console} from "forge-std/Script.sol";
+import {console} from "forge-std/Script.sol";
 import {HelperConfig} from "../../HelperConfig.s.sol";
 import {TokenPool} from "@chainlink/contracts-ccip/contracts/pools/TokenPool.sol";
 import {FinalityCodec} from "@chainlink/contracts-ccip/contracts/libraries/FinalityCodec.sol";
 import {RateLimiter} from "@chainlink/contracts-ccip/contracts/libraries/RateLimiter.sol";
 import {RateLimiterUtils, ITokenPoolV1RateLimiter} from "../../utils/RateLimiterUtils.s.sol";
 import {FinalityConfigUtils} from "../../utils/FinalityConfigUtils.s.sol";
+import {CctActions} from "../../../src/actions/CctActions.sol";
+import {EoaExecutor} from "../../../src/base/EoaExecutor.s.sol";
 
 /// @notice Sets the allowed finality configuration on a TokenPool, and optionally updates rate limits
 /// for the fast finality bucket on a specific remote chain lane.
@@ -58,7 +60,7 @@ import {FinalityConfigUtils} from "../../utils/FinalityConfigUtils.s.sol";
 ///
 ///   # Reset to default finality (disables fast finality transfers):
 ///   forge script script/configure/finality-config/SetFinalityConfig.s.sol --rpc-url $ETHEREUM_SEPOLIA_RPC_URL --account <KEYSTORE_NAME> --broadcast
-contract SetFinalityConfig is Script {
+contract SetFinalityConfig is EoaExecutor {
     HelperConfig public helperConfig;
 
     // ── Storage: avoids EVM stack pressure inside run() ────────────────────
@@ -145,22 +147,10 @@ contract SetFinalityConfig is Script {
         }
 
         // ── Step 1: Set finality config ────────────────────────────────────
-        vm.startBroadcast();
-
         console.log(string.concat("[Step 1] Setting finality config on ", chainName));
 
-        try tokenPool.setAllowedFinalityConfig(s_newFinalityConfig) {
-            console.log(unicode"✅ Finality config set successfully!");
-        } catch (bytes memory err) {
-            console.log(unicode"❌ Error: setAllowedFinalityConfig() reverted.");
-            console.log("  Raw revert data:");
-            console.logBytes(err);
-            console.log(
-                "  If the error is OnlyCallableByOwner(), ensure you are broadcasting with the pool owner's account."
-            );
-            console.log("  If the function selector is missing, the pool may be v1 (requires TokenPool v2.0+).");
-            revert("setAllowedFinalityConfig() reverted - see raw error above");
-        }
+        executeCalls(CctActions.setAllowedFinalityConfig(tokenPoolAddress, s_newFinalityConfig));
+        console.log(unicode"✅ Finality config set successfully!");
 
         // ── Step 2: Apply rate limit update (if requested) ─────────────────
         if (hasRateLimitUpdate) {
@@ -168,8 +158,6 @@ contract SetFinalityConfig is Script {
                 tokenPool, tokenPoolAddress, remoteChainSelector, destChainFullName, chainName, update, isV2
             );
         }
-
-        vm.stopBroadcast();
 
         // ── Log updated rate limits (if DEST_CHAIN provided) ──────────────
         if (destChainSet) {
@@ -262,14 +250,9 @@ contract SetFinalityConfig is Script {
 
         RateLimiterUtils.logNewConfig(u.updateOutbound, outbound, u.updateInbound, inbound);
 
-        TokenPool.RateLimitConfigArgs[] memory args = new TokenPool.RateLimitConfigArgs[](1);
-        args[0] = TokenPool.RateLimitConfigArgs({
-            remoteChainSelector: remoteChainSelector,
-            fastFinality: true,
-            outboundRateLimiterConfig: outbound,
-            inboundRateLimiterConfig: inbound
-        });
-        tokenPool.setRateLimitConfig(args);
+        // Fast-finality bucket update (fastFinality=true) through the version-detected action dispatch.
+        // setAllowedFinalityConfig above already established this is a v2 pool.
+        executeCalls(CctActions.setRateLimits(address(tokenPool), isV2, remoteChainSelector, true, outbound, inbound));
 
         console.log(unicode"✅ Rate limits updated successfully!");
     }

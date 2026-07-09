@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.24;
 
-import {Script, console} from "forge-std/Script.sol";
+import {console} from "forge-std/Script.sol";
 import {HelperConfig} from "../../HelperConfig.s.sol";
 import {TokenPool} from "@chainlink/contracts-ccip/contracts/pools/TokenPool.sol";
 import {RateLimiter} from "@chainlink/contracts-ccip/contracts/libraries/RateLimiter.sol";
 import {RateLimiterUtils, ITokenPoolV1RateLimiter} from "../../utils/RateLimiterUtils.s.sol";
+import {CctActions} from "../../../src/actions/CctActions.sol";
+import {EoaExecutor} from "../../../src/base/EoaExecutor.s.sol";
 
 /// @notice Updates rate limiter configuration on a TokenPool, compatible with both v1 and v2 pools.
 ///
@@ -41,7 +43,7 @@ import {RateLimiterUtils, ITokenPoolV1RateLimiter} from "../../utils/RateLimiter
 ///   # Disable outbound only:
 ///   DEST_CHAIN=MANTLE_SEPOLIA OUTBOUND_RATE_LIMIT_ENABLED=false \
 ///   forge script script/configure/rate-limiter/UpdateRateLimiters.s.sol --rpc-url $ETHEREUM_SEPOLIA_RPC_URL --account <KEYSTORE_NAME> --broadcast
-contract UpdateRateLimiters is Script {
+contract UpdateRateLimiters is EoaExecutor {
     // ── Storage: shared between run() and helper functions ─────────────────
     // Using storage instead of function parameters eliminates EVM stack pressure.
     HelperConfig public helperConfig;
@@ -154,26 +156,15 @@ contract UpdateRateLimiters is Script {
         _broadcastRateLimitConfig(outbound, inbound);
     }
 
-    /// @dev Broadcasts the on-chain call (v1 or v2 pool).
+    /// @dev Routes the update through the version-detected action-layer dispatch: v2 pools take
+    ///      `setRateLimitConfig(RateLimitConfigArgs[])`, v1 pools take `setChainRateLimiterConfig`. The
+    ///      `s_isV2` capability was detected via `RateLimiterUtils.isV2Pool` above (probe stays script-side).
     function _broadcastRateLimitConfig(RateLimiter.Config memory outbound, RateLimiter.Config memory inbound) internal {
-        vm.startBroadcast();
-        if (s_isV2) {
-            TokenPool.RateLimitConfigArgs[] memory args = new TokenPool.RateLimitConfigArgs[](1);
-            args[0] = TokenPool.RateLimitConfigArgs({
-                remoteChainSelector: s_selector,
-                fastFinality: s_fastFinality,
-                outboundRateLimiterConfig: outbound,
-                inboundRateLimiterConfig: inbound
-            });
-            TokenPool(s_poolAddress).setRateLimitConfig(args);
-        } else {
-            if (s_fastFinality) {
-                console.log(
-                    unicode"⚠️  Warning: FAST_FINALITY=true is ignored on v1 pools. Updating the standard bucket."
-                );
-            }
-            ITokenPoolV1RateLimiter(s_poolAddress).setChainRateLimiterConfig(s_selector, outbound, inbound);
+        if (!s_isV2 && s_fastFinality) {
+            console.log(
+                unicode"⚠️  Warning: FAST_FINALITY=true is ignored on v1 pools. Updating the standard bucket."
+            );
         }
-        vm.stopBroadcast();
+        executeCalls(CctActions.setRateLimits(s_poolAddress, s_isV2, s_selector, s_fastFinality, outbound, inbound));
     }
 }

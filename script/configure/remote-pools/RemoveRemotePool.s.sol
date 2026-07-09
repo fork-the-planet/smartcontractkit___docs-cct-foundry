@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.24;
 
-import {Script, console} from "forge-std/Script.sol";
+import {console} from "forge-std/Script.sol";
 import {HelperConfig} from "../../HelperConfig.s.sol";
 import {TokenPool} from "@chainlink/contracts-ccip/contracts/pools/TokenPool.sol";
+import {CctActions} from "../../../src/actions/CctActions.sol";
+import {EoaExecutor} from "../../../src/base/EoaExecutor.s.sol";
 
 /// @notice Removes a remote pool address from a TokenPool for a given remote chain.
 ///
@@ -19,7 +21,7 @@ import {TokenPool} from "@chainlink/contracts-ccip/contracts/pools/TokenPool.sol
 ///   DEST_CHAIN=MANTLE_SEPOLIA \
 ///   REMOTE_POOL_ADDRESS=0xOldRemotePoolAddress \
 ///   forge script script/configure/remote-pools/RemoveRemotePool.s.sol --rpc-url $ETHEREUM_SEPOLIA_RPC_URL --account <KEYSTORE_NAME> --broadcast
-contract RemoveRemotePool is Script {
+contract RemoveRemotePool is EoaExecutor {
     HelperConfig public helperConfig;
 
     function run() external {
@@ -88,13 +90,9 @@ contract RemoveRemotePool is Script {
         }
         console.log("");
 
-        vm.startBroadcast();
-
         console.log(string.concat("[Step 1] Removing remote pool on ", sourceChainName));
 
-        tokenPool.removeRemotePool(remoteChainSelector, abi.encode(remotePoolAddress));
-
-        vm.stopBroadcast();
+        executeCalls(CctActions.removeRemotePool(tokenPoolAddress, remoteChainSelector, abi.encode(remotePoolAddress)));
 
         console.log(unicode"✅ Remote pool removed successfully!");
         console.log("");
