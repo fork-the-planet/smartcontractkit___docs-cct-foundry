@@ -18,7 +18,7 @@ that need it, never exported. Targets that touch the API need only `curl` + `jq`
 | `discover`                            | List the CCIP API testnet catalog joined against local configs      | `FILTER=<term>` (optional)    | `bash script/config/sync-discover.sh`                                           |
 | `add-chain`                           | Generate `config/chains/<CHAIN>.json` from the live API, then sync  | `CHAIN=` **+** `SELECTOR=` (both required) | `SyncCcipConfig.s.sol --sig "init(string,uint256)" <CHAIN> <SELECTOR>` → canonicalize |
 | `add-lane`                            | Append a `lanes{}` policy entry LOCAL → REMOTE (writes **only** the `lanes` subtree; no API fetch) | `LOCAL=` `REMOTE=` `CAPACITY=` `RATE=` (all required); `INBOUND_CAPACITY=` + `INBOUND_RATE=` (paired, optional) add the `inbound{}` block; `BOTH=1` adds the reciprocal | `SyncCcipConfig.s.sol --sig "addLane(string,string,uint256,uint256)" <LOCAL> <REMOTE> <CAP> <RATE>` (6-arg overload with the inbound pair; twice with `BOTH=1`) → canonicalize both files |
-| `remove-lane`                         | Remove a `lanes{}` policy entry LOCAL → REMOTE (undo of `add-lane`; writes **only** the `lanes` subtree, declaration only - an applied lane must also be removed on-chain via `ApplyChainUpdates`) | `LOCAL=` `REMOTE=` (both required); `BOTH=1` removes the reciprocal | `SyncCcipConfig.s.sol --sig "removeLane(string,string)" <LOCAL> <REMOTE>` (twice with `BOTH=1`) → canonicalize both files |
+| `remove-lane`                         | Remove a `lanes{}` policy entry LOCAL → REMOTE (undo of `add-lane`; writes **only** the `lanes` subtree, declaration only - an applied lane must also be removed on-chain via `RemoveChain`, or `RemoveRemotePool` for a single pool) | `LOCAL=` `REMOTE=` (both required); `BOTH=1` removes the reciprocal | `SyncCcipConfig.s.sol --sig "removeLane(string,string)" <LOCAL> <REMOTE>` (twice with `BOTH=1`) → canonicalize both files |
 | `adopt-token`                         | Adopt an externally deployed token (and optionally its pool) into the address registry after on-chain validation (needs the chain's `rpcEnv` RPC; see [`enabling-existing-token.md`](enabling-existing-token.md)) | `CHAIN=` **+** `TOKEN=` (both required); `TOKEN_POOL=` optional | `AdoptToken.s.sol --sig "run(string,address,address)" <CHAIN> <TOKEN> <TOKEN_POOL or 0x0>` |
 | `sync`                                | Refresh one chain's API-served fields (`ccip{}` + identity/metadata) from the API | `CHAIN=` (required) | `SyncCcipConfig.s.sol --sig "run(string)" <CHAIN>` → canonicalize                |
 | `sync-preview`                        | Fetch + log a chain's `ccip{}` from the API **without writing**     | `CHAIN=` (required)           | `SyncCcipConfig.s.sol --sig "preview(string)" <CHAIN>`                           |
@@ -172,8 +172,9 @@ A lane is **directional policy**: `lanes.<remote>` in chain A's file declares "A
 `<remote>`" with an outbound rate limit. A working transfer path needs the lane declared on **both** files
 (each side's `applyChainUpdates` reads its own file), so the committed configs must form a **reciprocal
 mesh**. `make add-lane ... BOTH=1` writes both sides in one command, and `make remove-lane` is its undo
-(declaration only - a lane still applied on the pool must be removed separately via
-`ApplyChainUpdates`, and until then the doctor's lanes rung WARNs about the undeclared on-chain
+(declaration only - a lane still applied on the pool must be removed separately on-chain via
+`RemoveChain` (whole-chain teardown, every version) or `RemoveRemotePool` (one pool, 1.5.1+), and
+until then the doctor's lanes rung WARNs about the undeclared on-chain
 lane); the doctor's **mesh rung** proves the property across the whole directory on every
 `make doctor CHAIN=<name>`:
 

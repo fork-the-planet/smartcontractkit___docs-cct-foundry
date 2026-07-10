@@ -88,7 +88,7 @@ endif
 	done
 	@echo "review the lane policy diff (lanes{} = owner policy), then: make doctor CHAIN=$(LOCAL)"
 
-remove-lane: tools ## Remove a lanes{} policy entry LOCAL -> REMOTE from the declaration (LOCAL= REMOTE= required; BOTH=1 removes the reciprocal; on-chain removal via ApplyChainUpdates is a separate step)
+remove-lane: tools ## Remove a lanes{} policy entry LOCAL -> REMOTE from the declaration (LOCAL= REMOTE= required; BOTH=1 removes the reciprocal; on-chain removal via RemoveChain, or RemoveRemotePool for a single pool, is a separate step)
 	$(if $(LOCAL),,$(error LOCAL is required: make remove-lane LOCAL=<name> REMOTE=<name> [BOTH=1]))
 	$(if $(REMOTE),,$(error REMOTE is required: make remove-lane LOCAL=<name> REMOTE=<name> [BOTH=1]))
 	FOUNDRY_PROFILE=sync forge script $(SYNC_SCRIPT) --sig "removeLane(string,string)" "$(LOCAL)" "$(REMOTE)"

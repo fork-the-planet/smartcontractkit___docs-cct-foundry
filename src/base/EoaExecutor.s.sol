@@ -3,16 +3,51 @@ pragma solidity 0.8.24;
 
 import {Script, console} from "forge-std/Script.sol";
 import {CctActions} from "../actions/CctActions.sol";
+import {SafeMode} from "./SafeMode.sol";
 
 /// @title EoaExecutor
-/// @notice The EOA execution mode of the action layer: takes the `Call[]` a `CctActions` builder
-///         produced, broadcasts each call in order from the script signer, and logs each target and
-///         function selector. Scripts inherit this instead of calling contracts inline, so the calldata
-///         a user reviews in the logs is exactly the calldata the action layer built.
+/// @notice The execution entry point of the action layer: takes the `Call[]` a `CctActions` builder
+///         produced and hands it to the executor the `MODE` environment variable selects. `MODE`
+///         unset (or `eoa`, the default) broadcasts each call in order from the script signer —
+///         today's behavior, unchanged. `MODE=safe` routes the IDENTICAL `Call[]` to the Safe
+///         executor (`SafeMode`): the batch is emitted for review/signing instead of broadcast.
+///         Scripts inherit this instead of calling contracts inline, so the calldata a user reviews
+///         is exactly the calldata the action layer built, whichever mode executes it.
 abstract contract EoaExecutor is Script {
-    /// @notice Broadcasts every call in order, reverting on the first failure (atomic batch semantics —
-    ///         a dry run surfaces the revert before anything is sent).
-    function executeCalls(CctActions.Call[] memory calls) internal {
+    /// @notice Executes the calls in the mode `MODE` selects (default `eoa`). Virtual so tests can
+    ///         capture the built calls without broadcasting or writing batch artifacts.
+    function executeCalls(CctActions.Call[] memory calls) internal virtual {
+        string memory mode = _executionMode();
+        if (keccak256(bytes(mode)) == keccak256(bytes("eoa"))) {
+            _broadcastCalls(calls);
+        } else if (keccak256(bytes(mode)) == keccak256(bytes("safe"))) {
+            SafeMode.run(calls);
+        } else {
+            revert(string.concat("Unknown MODE '", mode, "': use 'eoa' (default) or 'safe'."));
+        }
+    }
+
+    /// @notice The execution mode, from the `MODE` environment variable (default `eoa`). Virtual so
+    ///         tests can pin a mode without mutating the process-wide environment.
+    function _executionMode() internal view virtual returns (string memory) {
+        return vm.envOr("MODE", string("eoa"));
+    }
+
+    /// @notice The account that will EXECUTE the calls in the selected mode: the Safe in `safe`
+    ///         mode, the script broadcaster otherwise. Preflight checks that assert on-chain
+    ///         authority (owner, pending administrator, admin role) must compare against THIS
+    ///         account — comparing against `broadcaster()` wrongly rejects Safe-mode runs, where the
+    ///         broadcaster only emits or submits and the Safe is the account acting on-chain.
+    function executingAccount() internal returns (address) {
+        if (keccak256(bytes(_executionMode())) == keccak256(bytes("safe"))) {
+            return vm.envAddress("SAFE_ADDRESS");
+        }
+        return broadcaster();
+    }
+
+    /// @notice The EOA mode: broadcasts every call in order, reverting on the first failure (atomic
+    ///         batch semantics — a dry run surfaces the revert before anything is sent).
+    function _broadcastCalls(CctActions.Call[] memory calls) private {
         vm.startBroadcast();
         for (uint256 i = 0; i < calls.length; i++) {
             console.log(

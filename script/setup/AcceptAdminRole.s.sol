@@ -51,11 +51,12 @@ contract AcceptAdminRole is EoaExecutor {
         console.log(string.concat("  Token Admin Registry:         ", vm.toString(config.tokenAdminRegistry)));
         console.log(string.concat("  Pending Administrator:        ", vm.toString(pendingAdministrator)));
 
-        address signer = broadcaster();
-        console.log(string.concat("  Signer:                       ", vm.toString(signer)));
+        // The account accepting on-chain: the Safe in safe mode, the broadcaster otherwise.
+        address acceptor = executingAccount();
+        console.log(string.concat("  Acceptor:                     ", vm.toString(acceptor)));
         console.log("");
 
-        require(pendingAdministrator == signer, "Only the pending administrator can accept the admin role");
+        require(pendingAdministrator == acceptor, "Only the pending administrator can accept the admin role");
 
         console.log(string.concat("\n[Step 1] Accepting admin role for token on ", chainName));
         executeCalls(CctActions.acceptAdminRole(config.tokenAdminRegistry, tokenAddress));
@@ -67,7 +68,7 @@ contract AcceptAdminRole is EoaExecutor {
         console.log("========================================");
         console.log(string.concat("Token Address: ", vm.toString(tokenAddress)));
         console.log(string.concat("Token Address: ", helperConfig.getExplorerUrl(chainId, "/address/", tokenAddress)));
-        console.log(string.concat("New Administrator: ", vm.toString(signer)));
+        console.log(string.concat("New Administrator: ", vm.toString(acceptor)));
         console.log("========================================");
         console.log("");
     }

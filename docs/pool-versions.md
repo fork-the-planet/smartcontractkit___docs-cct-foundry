@@ -65,6 +65,76 @@ The catalog and ranges are validated live, not only against source: every catalo
 repo scripts (adoption, lane updates including the 1.5.0 encoding, rate-limit updates, read-backs),
 including end-to-end cross-chain token transfers per version in both directions over the same lane.
 
+## Removing a lane or a pool
+
+Teardown has two distinct operations, and they are not the same:
+
+- **Remove a whole chain (tear the lane down).** `script/configure/remote-chains/RemoveChain.s.sol`
+  fully unsupports a remote chain: it removes the selector and deletes the remote-chain config
+  (pools, remote token, rate limits), so `isSupportedChain` returns false and both directions revert
+  `ChainNotAllowed` afterward. This works on **every** cataloged version; only the encoding differs,
+  and the script dispatches on the source pool's version exactly like `ApplyChainUpdates`. A 1.5.0
+  pool takes the single-argument shape with one `allowed:false` entry (both rate-limit configs
+  disabled and zeroed, which 1.5.0's validation requires: an enabled config reverts
+  `RateLimitMustBeDisabled`, a disabled-but-nonzero one reverts `DisabledNonZeroRateLimit`); 1.5.1 and
+  later take the modern `applyChainUpdates(uint64[] toRemove, ChainUpdate[] toAdd)` with the selector
+  in `toRemove` and an empty `toAdd`. On 2.0.0 the delete also clears the chain's fast-finality
+  inbound/outbound rate-limit buckets (separate mappings from the standard limits). Removing a chain
+  the pool does not support reverts `NonExistentChain`; the script pre-checks `isSupportedChain` and
+  refuses with a friendly reason first.
+
+- **Remove one remote pool from a still-supported chain.**
+  `script/configure/remote-pools/RemoveRemotePool.s.sol` drops a single remote pool via
+  `removeRemotePool`, leaving the chain supported. This is a **1.5.1+** operation: 1.5.0 holds exactly
+  one remote pool per chain (reachable only via `setRemotePool`, a replace), so there is no standalone
+  pool removal on 1.5.0 and the script refuses with a message pointing at whole-chain teardown.
+
+  The last-pool nuance (1.5.1+): `removeRemotePool` never guards against emptying the set, and it does
+  not touch the chain selector. Removing the last remaining pool therefore leaves the chain
+  **supported with zero pools**. Outbound `lockOrBurn` still passes the pool's own validation (it does
+  not consult the remote-pool set, though an end-to-end send still needs the Router onRamp and the
+  local lane), but inbound `releaseOrMint` reverts `InvalidSourcePoolAddress` because no remote pool
+  matches. To fully drop such a lane, follow the pool removal with a chain removal (`RemoveChain`), or
+  use `RemoveChain` directly.
+
+### Tearing down a live lane safely
+
+The scripts execute the removal the moment you run them; they warn about in-flight messages but do not
+gate on drain. On a lane carrying real traffic, run the removal as a sequence, not a one-shot:
+
+1. **Throttle new outbound, keep inbound open.** On the source pool set a strict-but-enabled outbound
+   limit (for example `outbound {isEnabled:true, capacity:2, rate:1}`, leaving `inbound` open) via
+   `UpdateRateLimiters`. Do not use `isEnabled:false`: that disables limiting rather than throttling
+   it. This stops new sends without rejecting messages already in flight.
+2. **Wait out finality and executor drain.** Wait past source finality, then confirm every in-flight
+   `messageId` on the lane reaches `SUCCESS` (`ccip-cli show`, the CCIP Explorer, or the destination
+   OffRamp's `getExecutionState == 2`) plus a safety margin.
+3. **Remove both directions, sending side first.** `RemoveChain` is single-sided by construction, so a
+   full teardown runs it on **both** chains. Remove the sending side first and let the other chain
+   drain its inbound before removing the reverse direction.
+4. **Then run `RemoveChain`.** Only now is the removal safe.
+
+**The reciprocal half-open window.** If you remove chain B on A while B still supports A, a B→A message
+already sent will lock or burn on B (B still recognizes A) but revert `releaseOrMint` on A, because A
+no longer recognizes B as a source. It sits at `FAILURE` with no auto-recovery. Always drain **both**
+directions before removing either side.
+
+**Rollback, and what removal does and does not touch.** Re-adding a removed lane is just
+`ApplyChainUpdates` / `make add-lane` plus an apply. Chain removal deletes only what lives in the
+pool's own remote-chain config: the remote pools, the remote token, and the standard rate-limiter
+bucket state, plus on 2.0.0 the fast-finality inbound/outbound rate-limit buckets. Everything there
+comes back only by re-adding and re-applying the lane (rate-limiter accumulator state does not
+survive).
+
+What removal does **not** touch is the more important footgun, because it is keyed by chain selector
+on separate storage that `applyChainUpdates` never reaches: the **CCV config and thresholds** (they
+live on the `AdvancedPoolHooks` contract, not the pool) and the **token-transfer-fee config**
+(`s_tokenTransferFeeConfig`, cleared only by `applyTokenTransferFeeConfigUpdates`). Both **survive**
+chain removal. So re-adding a previously-removed lane silently reactivates whatever CCV and fee config
+was set for that selector before. If the intent is a clean teardown, clear those separately (the
+hooks' CCV update and `applyTokenTransferFeeConfigUpdates` disable list); if the intent is a rollback,
+they are already in place and must not be double-applied.
+
 <a id="unknown-versions"></a>
 
 ## Unknown versions: writes refuse, reads degrade

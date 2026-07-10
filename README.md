@@ -534,7 +534,7 @@ make add-chain CHAIN=ethereum-testnet-sepolia-base-1 SELECTOR=103449712358744650
 make doctor CHAIN=ethereum-testnet-sepolia-base-1   # 3. layered verification — re-run until green
 ```
 
-`CHAIN` is the chain's **canonical CCIP selectorName** as shown by `make discover` (the API/registry name — e.g. `ethereum-testnet-sepolia-base-1`, not a bespoke `base-sepolia`); it becomes the file name `config/chains/<CHAIN>.json` and is validated against the API. `SELECTOR` is the **explicit identity key**, also from `make discover` — every fetch cross-checks both: a valid-but-wrong selector fails loudly as `SELECTOR MISMATCH`, and a non-canonical name as `SELECTOR NAME MISMATCH`, instead of silently writing another chain's contracts. New chains are **discovered automatically** from `config/chains/` — `HelperConfig` scans the directory, so no Solidity edit is needed anywhere. For a newly added chain the `chainNameIdentifier` (and hence the `rpcEnv` and the `<ID>_TOKEN`/`<ID>_TOKEN_POOL` override prefix) is **derived from the selectorName** as UPPER_SNAKE — so it may differ in style from the six bundled chains' curated short forms (e.g. `AVALANCHE_TESTNET_FUJI`, not `AVALANCHE_FUJI`); `add-chain` **prints the exact `chainNameIdentifier` and `rpcEnv` names it generated** so you never have to guess (or open the JSON) which env var to export. `add-chain` prints your next steps: add the chain's RPC env var to `.env`, then deploy your token and pool there ([Step 1](#step-1-deploy-token-on-both-chains) / [Step 2](#step-2-deploy-token-pools-on-both-chains)). Then declare the lane policy with `make add-lane LOCAL=<name> REMOTE=<remote> CAPACITY=<wei> RATE=<wei> BOTH=1`, apply it on-chain via [Step 5](#step-5-apply-chain-updates-configure-cross-chain-routes), and re-run `make doctor` — its lanes rung reconciles the declared policy against the pool. To retire a lane, `make remove-lane LOCAL=<name> REMOTE=<remote> [BOTH=1]` removes the declaration; that is a separate step from the on-chain removal (the pool's `applyChainUpdates` takes the selector in `remoteChainSelectorsToRemove`), and between the two `make doctor` WARNs that the on-chain lane is not declared.
+`CHAIN` is the chain's **canonical CCIP selectorName** as shown by `make discover` (the API/registry name — e.g. `ethereum-testnet-sepolia-base-1`, not a bespoke `base-sepolia`); it becomes the file name `config/chains/<CHAIN>.json` and is validated against the API. `SELECTOR` is the **explicit identity key**, also from `make discover` — every fetch cross-checks both: a valid-but-wrong selector fails loudly as `SELECTOR MISMATCH`, and a non-canonical name as `SELECTOR NAME MISMATCH`, instead of silently writing another chain's contracts. New chains are **discovered automatically** from `config/chains/` — `HelperConfig` scans the directory, so no Solidity edit is needed anywhere. For a newly added chain the `chainNameIdentifier` (and hence the `rpcEnv` and the `<ID>_TOKEN`/`<ID>_TOKEN_POOL` override prefix) is **derived from the selectorName** as UPPER_SNAKE — so it may differ in style from the six bundled chains' curated short forms (e.g. `AVALANCHE_TESTNET_FUJI`, not `AVALANCHE_FUJI`); `add-chain` **prints the exact `chainNameIdentifier` and `rpcEnv` names it generated** so you never have to guess (or open the JSON) which env var to export. `add-chain` prints your next steps: add the chain's RPC env var to `.env`, then deploy your token and pool there ([Step 1](#step-1-deploy-token-on-both-chains) / [Step 2](#step-2-deploy-token-pools-on-both-chains)). Then declare the lane policy with `make add-lane LOCAL=<name> REMOTE=<remote> CAPACITY=<wei> RATE=<wei> BOTH=1`, apply it on-chain via [Step 5](#step-5-apply-chain-updates-configure-cross-chain-routes), and re-run `make doctor` — its lanes rung reconciles the declared policy against the pool. To retire a lane, `make remove-lane LOCAL=<name> REMOTE=<remote> [BOTH=1]` removes the declaration; that is a separate step from the on-chain removal, done with [`RemoveChain`](#remove-a-remote-chain) (whole-chain teardown, every version) or [`RemoveRemotePool`](#remove-a-remote-pool) (a single pool, 1.5.1+), and between the two `make doctor` WARNs that the on-chain lane is not declared.
 
 Full details: [Configuration](#configuration) overview, the per-field [`docs/config-schema.md`](docs/config-schema.md), and the command + architecture reference [`docs/config-architecture.md`](docs/config-architecture.md).
 
@@ -1048,6 +1048,8 @@ DEST_CHAIN=MANTLE_SEPOLIA \
 
 ##### Remove a Remote Pool
 
+Drops a single remote pool from a chain that stays supported. This is a 1.5.1+ operation; on a 1.5.0 pool it refuses and points at "Remove a Remote Chain" below, since 1.5.0 holds one remote pool per chain (there is no standalone pool removal).
+
 > **Warning:** All inflight transactions from the removed pool will be rejected after removal. Ensure there are no inflight transactions before proceeding.
 
 ```bash
@@ -1055,6 +1057,23 @@ DEST_CHAIN=MANTLE_SEPOLIA \
   REMOTE_POOL_ADDRESS=0xOldRemotePoolAddress \
   forge script \
   script/configure/remote-pools/RemoveRemotePool.s.sol \
+  --rpc-url \
+  $ETHEREUM_SEPOLIA_RPC_URL \
+  --account \
+  $KEYSTORE_NAME \
+  --broadcast
+```
+
+##### Remove a Remote Chain
+
+Tears down the whole lane: fully unsupports a remote chain on the source pool (removes the selector and deletes its remote-chain config), so neither direction accepts messages afterward. Use this to retire a lane, not to swap a pool. Works on every pool version (1.5.0 through 2.0.0) — the script dispatches on the pool's on-chain version.
+
+> **Warning:** All inflight transactions on this lane will be rejected after removal. Ensure there are no inflight messages to or from this chain before proceeding. See [`docs/pool-versions.md`](docs/pool-versions.md#removing-a-lane-or-a-pool) for the live-lane drain sequence and the config that survives removal.
+
+```bash
+DEST_CHAIN=MANTLE_SEPOLIA \
+  forge script \
+  script/configure/remote-chains/RemoveChain.s.sol \
   --rpc-url \
   $ETHEREUM_SEPOLIA_RPC_URL \
   --account \

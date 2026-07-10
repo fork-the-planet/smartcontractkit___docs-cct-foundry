@@ -10,6 +10,7 @@ import {PoolVersion} from "../../script/utils/PoolVersion.s.sol";
 import {ApplyChainUpdates} from "../../script/setup/ApplyChainUpdates.s.sol";
 import {AddRemotePool} from "../../script/configure/remote-pools/AddRemotePool.s.sol";
 import {RemoveRemotePool} from "../../script/configure/remote-pools/RemoveRemotePool.s.sol";
+import {RemoveChain} from "../../script/configure/remote-chains/RemoveChain.s.sol";
 import {BaseForkTest} from "../BaseForkTest.t.sol";
 import {HelperConfig} from "../../script/HelperConfig.s.sol";
 
@@ -95,6 +96,31 @@ contract MockModernPool {
     }
 }
 
+/// @dev A pool that reports every chain as UNSUPPORTED. RemoveChain's `isSupportedChain` pre-check
+///      must surface the friendly "nothing to remove" refusal against this before it reaches the
+///      version dispatch, so this mock carries no typeAndVersion (the pre-check fires first).
+contract MockUnsupportedChainPool {
+    function isSupportedChain(uint64) external pure returns (bool) {
+        return false;
+    }
+}
+
+/// @dev The faithful 1.5.0 surface of `Mock150Pool` PLUS the singular-only 1.5.0 write path
+///      (`applyChainUpdates(ChainUpdate[])`, selector 0xdb6327dc), which records the calldata it
+///      receives. There is deliberately still NO plural `getRemotePools`, so running RemoveChain's
+///      whole `_removeChain` body against this mock proves the fence-before-read fix: the script must
+///      resolve the version and read through the version-safe helper (singular on 1.5.0) rather than
+///      raw-reverting on the absent plural getter, and then emit the 1.5.0 removal encoding here.
+contract Mock150PoolWithApply is Mock150Pool {
+    bytes public lastApplyChainUpdatesCalldata;
+
+    constructor(bytes memory remotePool) Mock150Pool(remotePool) {}
+
+    function applyChainUpdates(ITokenPoolV150.ChainUpdate[] calldata) external {
+        lastApplyChainUpdatesCalldata = msg.data;
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Shims and harnesses
 // ─────────────────────────────────────────────────────────────────────────────
@@ -172,6 +198,30 @@ contract RemoveRemotePoolHarness is RemoveRemotePool {
     }
 }
 
+/// @dev Exposes RemoveChain's version-dispatch switch (for byte-equal calldata proofs) and its
+///      post-resolution body (for the isSupportedChain pre-check proof), each with an injected pool
+///      address — env-based pool resolution is process-global and cannot be exercised race-free
+///      while suites run in parallel, mirroring the Add/RemoveRemotePool harnesses.
+contract RemoveChainHarness is RemoveChain {
+    function buildChainRemovalCalls(PoolVersions.Version version, address poolAddress, uint64 remoteChainSelector)
+        external
+        pure
+        returns (CctActions.Call[] memory)
+    {
+        return _buildChainRemovalCalls(version, poolAddress, remoteChainSelector);
+    }
+
+    function invoke(
+        address tokenPoolAddress,
+        uint64 remoteChainSelector,
+        string memory destChainName,
+        uint256 destChainId
+    ) external {
+        helperConfig = new HelperConfig();
+        _removeChain(tokenPoolAddress, remoteChainSelector, destChainName, destChainId);
+    }
+}
+
 /// @dev Exposes the script's internal conversion and the exhaustive lane-update dispatch switch.
 contract ApplyChainUpdatesHarness is ApplyChainUpdates {
     function convert(TokenPool.ChainUpdate[] memory updates, bool[] memory replaceExisting)
@@ -213,10 +263,12 @@ contract PoolVersionDispatchTest is Test {
     address internal constant POOL = address(0x3333333333333333333333333333333333333333);
 
     ApplyChainUpdatesHarness internal harness;
+    RemoveChainHarness internal removeChainHarness;
     ResolverShim internal shim;
 
     function setUp() public {
         harness = new ApplyChainUpdatesHarness();
+        removeChainHarness = new RemoveChainHarness();
         shim = new ResolverShim();
     }
 
@@ -581,6 +633,74 @@ contract PoolVersionDispatchTest is Test {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
+    // RemoveChain dispatch: exhaustive whole-lane teardown switch over the catalog
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// @dev 1.5.0 tears a lane down through its single-argument applyChainUpdates with ONE
+    ///      `allowed:false` entry, empty remote pool/token bytes, and BOTH rate-limit configs
+    ///      disabled+zeroed (1.5.0's `_validateTokenBucketConfig(cfg, mustBeDisabled=true)` reverts
+    ///      otherwise). The expectation is re-encoded here independently of the script.
+    function test_RemoveChainDispatch_V150_LegacyAllowedFalseEntry_ByteEqual() public view {
+        CctActions.Call[] memory calls =
+            removeChainHarness.buildChainRemovalCalls(PoolVersions.Version.V1_5_0, POOL, SELECTOR);
+
+        assertEq(calls.length, 1, "one call");
+        assertEq(calls[0].target, POOL, "target");
+        assertEq(calls[0].value, 0, "value");
+        assertEq(bytes4(calls[0].data), bytes4(0xdb6327dc), "1.5.0 applyChainUpdates selector");
+
+        ITokenPoolV150.ChainUpdate[] memory expected = new ITokenPoolV150.ChainUpdate[](1);
+        expected[0] = ITokenPoolV150.ChainUpdate({
+            remoteChainSelector: SELECTOR,
+            allowed: false,
+            remotePoolAddress: "",
+            remoteTokenAddress: "",
+            outboundRateLimiterConfig: RateLimiter.Config({isEnabled: false, capacity: 0, rate: 0}),
+            inboundRateLimiterConfig: RateLimiter.Config({isEnabled: false, capacity: 0, rate: 0})
+        });
+        assertEq(
+            calls[0].data,
+            abi.encodeCall(ITokenPoolV150.applyChainUpdates, (expected)),
+            "1.5.0 removal calldata mismatch vs hand-encoded expectation"
+        );
+    }
+
+    /// @dev 1.5.1 / 1.6.1 / 2.0.0 tear a lane down through the modern two-argument applyChainUpdates
+    ///      with the selector in `toRemove` and an EMPTY `toAdd`. All three share one byte-identical
+    ///      shape; the modern selector 0xe8a1da17 is asserted alongside.
+    function test_RemoveChainDispatch_ModernVersionsShareOneShape_ByteEqual() public view {
+        uint64[] memory removes = new uint64[](1);
+        removes[0] = SELECTOR;
+        TokenPool.ChainUpdate[] memory noAdds = new TokenPool.ChainUpdate[](0);
+        bytes memory expected = abi.encodeCall(TokenPool.applyChainUpdates, (removes, noAdds));
+
+        PoolVersions.Version[3] memory modern =
+            [PoolVersions.Version.V1_5_1, PoolVersions.Version.V1_6_1, PoolVersions.Version.V2_0_0];
+        for (uint256 i = 0; i < modern.length; i++) {
+            CctActions.Call[] memory calls = removeChainHarness.buildChainRemovalCalls(modern[i], POOL, SELECTOR);
+            assertEq(calls.length, 1, "one call");
+            assertEq(calls[0].target, POOL, "target");
+            assertEq(bytes4(calls[0].data), bytes4(0xe8a1da17), "modern applyChainUpdates selector");
+            assertEq(
+                calls[0].data,
+                expected,
+                string.concat("modern removal calldata byte-equal for ", PoolVersions.toString(modern[i]))
+            );
+        }
+    }
+
+    /// @dev A version outside the catalog (UNKNOWN sentinel) must fail loudly at the dispatch switch
+    ///      rather than fall through to the modern encoding, mirroring the lane-update switch.
+    function test_RemoveChainDispatch_UnknownHitsNoBranch() public {
+        try removeChainHarness.buildChainRemovalCalls(PoolVersions.Version.UNKNOWN, POOL, SELECTOR) {
+            fail();
+        } catch Error(string memory reason) {
+            _assertContains(reason, "no chain-removal dispatch branch");
+            _assertContains(reason, "src/PoolVersions.sol");
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
     // setRateLimits: version-dispatched builder (calldata byte equality)
     // ─────────────────────────────────────────────────────────────────────────
 
@@ -848,18 +968,21 @@ contract AddRemotePoolFenceForkTest is BaseForkTest {
     }
 }
 
-/// @notice Fence-order proof for RemoveRemotePool, mirroring the AddRemotePool proof: a 1.5.0
-///         pool must get the NAMED unsupported-operation refusal before the script's
-///         isRemotePool/getRemotePools reads (both absent on 1.5.0) run.
+/// @notice Redirect proof for RemoveRemotePool on a 1.5.0 pool. RemoveRemotePool now fences 1.5.0
+///         BEFORE the generic `requireSupports` unsupported-operation refusal: 1.5.0 holds exactly
+///         one remote pool per chain, so there is no standalone pool removal, and the script points
+///         the operator at the whole-lane teardown (RemoveChain.s.sol) instead. This asserts the NEW
+///         redirect message (superseding the old "UnsupportedPoolOperation: removeRemotePool" text)
+///         and that it names RemoveChain.s.sol as the alternative. Still fires before any
+///         version-shaped read (isRemotePool/getRemotePools, both absent on 1.5.0), so a decode as
+///         Error(string) proves it is the curated redirect, not a raw EvmError from a missing selector.
 contract RemoveRemotePoolFenceForkTest is BaseForkTest {
     uint64 internal constant MANTLE_SEPOLIA_SELECTOR = 8236463271206331221;
 
-    function test_RemoveRemotePool_150Pool_NamedRefusalBeforeRead() public {
+    function test_RemoveRemotePool_150Pool_RedirectsToRemoveChainBeforeRead() public {
         Mock150Pool pool150 = new Mock150Pool(abi.encode(address(0x1111)));
         RemoveRemotePoolHarness script = new RemoveRemotePoolHarness();
 
-        // Error(string) proves the refusal is the curated message, not a raw EvmError from the
-        // absent isRemotePool/getRemotePools selectors (which would not decode as Error(string)).
         try script.invoke(
             address(pool150),
             address(0x4444444444444444444444444444444444444444),
@@ -869,13 +992,204 @@ contract RemoveRemotePoolFenceForkTest is BaseForkTest {
         ) {
             revert("RemoveRemotePool unexpectedly succeeded on a 1.5.0 pool");
         } catch Error(string memory reason) {
-            assertTrue(_reasonNamesTheFence(reason), reason);
+            assertTrue(_contains(reason, "removeRemotePool is not available on a 1.5.0 pool"), reason);
+            assertTrue(_contains(reason, "script/configure/remote-chains/RemoveChain.s.sol"), reason);
         }
     }
 
-    function _reasonNamesTheFence(string memory reason) internal pure returns (bool) {
-        bytes memory b = bytes(reason);
-        bytes memory n = bytes("UnsupportedPoolOperation: removeRemotePool");
+    function _contains(string memory s, string memory needle) internal pure returns (bool) {
+        bytes memory b = bytes(s);
+        bytes memory n = bytes(needle);
+        if (n.length > b.length) return false;
+        for (uint256 i = 0; i + n.length <= b.length; i++) {
+            bool matched = true;
+            for (uint256 j = 0; j < n.length; j++) {
+                if (b[i + j] != n[j]) {
+                    matched = false;
+                    break;
+                }
+            }
+            if (matched) return true;
+        }
+        return false;
+    }
+}
+
+/// @notice Behavioral + pre-check proofs for RemoveChain against a REAL v2.0.0 fixture pool.
+///         The fixture BurnMintTokenPool resolves to V2_0_0, so the modern removal branch is
+///         exercised on-chain: add a lane, tear it down with RemoveChain, and assert the chain is
+///         fully unsupported afterward. The 1.5.0 branch is covered transitively by the byte-equal
+///         dispatch proofs above (same calldata a 1.5.0 pool would receive). Plus the friendly
+///         isSupportedChain pre-check that refuses to touch an unconfigured lane.
+contract RemoveChainForkTest is BaseForkTest {
+    uint64 internal constant MANTLE_SEPOLIA_SELECTOR = 8236463271206331221;
+    address internal constant REMOTE_POOL = address(0x1111111111111111111111111111111111111111);
+    address internal constant REMOTE_POOL_2 = address(0x5555555555555555555555555555555555555555);
+    address internal constant REMOTE_TOKEN = address(0x2222222222222222222222222222222222222222);
+    uint128 internal constant OUTBOUND_CAPACITY = 1_000e18;
+    uint128 internal constant OUTBOUND_RATE = 0.1e18;
+
+    /// @notice Realistic teardown: the lane is added with ENABLED, non-zero rate limits (the live case,
+    ///         not 0/0), the bucket is read before, and after RemoveChain the whole chain is unsupported
+    ///         AND the rate-limit bucket is gone/zeroed — proving removal is destructive of rate config,
+    ///         as the brain note now claims. Exercises the modern (2.0.0) removal branch on-chain.
+    function test_RemoveChain_ModernPool_UnsupportsLaneAndClearsRateConfig() public {
+        (, address poolAddress) = deployTokenAndPoolFixture();
+        TokenPool pool = TokenPool(poolAddress);
+        address owner = pool.owner();
+
+        bytes[] memory onePool = new bytes[](1);
+        onePool[0] = abi.encode(REMOTE_POOL);
+        _exec(owner, _addMantleLane(poolAddress, onePool, true));
+        assertTrue(pool.isSupportedChain(MANTLE_SEPOLIA_SELECTOR), "precondition: lane not configured");
+
+        // Also enable a FAST-FINALITY bucket for the lane (a separate storage mapping on 2.0.0). The
+        // standard bucket came from applyChainUpdates above; the fast-finality bucket is set through the
+        // v2 setRateLimitConfig setter with fastFinality:true (owner-gated).
+        RateLimiter.Config memory ffOut =
+            RateLimiter.Config({isEnabled: true, capacity: OUTBOUND_CAPACITY, rate: OUTBOUND_RATE});
+        RateLimiter.Config memory ffIn = RateLimiter.Config({isEnabled: false, capacity: 0, rate: 0});
+        _exec(
+            owner,
+            CctActions.setRateLimits(
+                poolAddress, PoolVersions.Version.V2_0_0, MANTLE_SEPOLIA_SELECTOR, true, ffOut, ffIn
+            )
+        );
+
+        // The lane carries a live, ENABLED outbound rate limit before teardown — in BOTH the standard
+        // bucket (getCurrentRateLimiterState(sel, false)) and the fast-finality bucket (…, true).
+        (RateLimiter.TokenBucket memory outBefore,) = pool.getCurrentRateLimiterState(MANTLE_SEPOLIA_SELECTOR, false);
+        assertTrue(outBefore.isEnabled, "precondition: standard outbound rate limit not enabled");
+        assertEq(outBefore.capacity, OUTBOUND_CAPACITY, "precondition: standard outbound capacity");
+        (RateLimiter.TokenBucket memory ffOutBefore,) = pool.getCurrentRateLimiterState(MANTLE_SEPOLIA_SELECTOR, true);
+        assertTrue(ffOutBefore.isEnabled, "precondition: fast-finality outbound rate limit not enabled");
+        assertEq(ffOutBefore.capacity, OUTBOUND_CAPACITY, "precondition: fast-finality outbound capacity");
+
+        // Tear the whole lane down. The fixture owner is the default sender the harness broadcasts as.
+        new RemoveChainHarness().invoke(poolAddress, MANTLE_SEPOLIA_SELECTOR, "MANTLE_SEPOLIA", 5003);
+
+        assertFalse(pool.isSupportedChain(MANTLE_SEPOLIA_SELECTOR), "lane still supported after RemoveChain");
+        uint64[] memory supported = pool.getSupportedChains();
+        for (uint256 i = 0; i < supported.length; i++) {
+            assertTrue(supported[i] != MANTLE_SEPOLIA_SELECTOR, "selector still in getSupportedChains after removal");
+        }
+        // Removal deletes s_remoteChainConfigs[sel] (standard bucket) AND both fast-finality bucket
+        // mappings (TokenPool.sol:691-693), so BOTH read back zeroed/disabled; a re-add would NOT
+        // restore them (the rate config is destroyed, not stashed).
+        (RateLimiter.TokenBucket memory outAfter,) = pool.getCurrentRateLimiterState(MANTLE_SEPOLIA_SELECTOR, false);
+        assertFalse(outAfter.isEnabled, "standard rate limit still enabled after RemoveChain");
+        assertEq(outAfter.capacity, 0, "standard rate-limit capacity not cleared after RemoveChain");
+        (RateLimiter.TokenBucket memory ffOutAfter,) = pool.getCurrentRateLimiterState(MANTLE_SEPOLIA_SELECTOR, true);
+        assertFalse(ffOutAfter.isEnabled, "fast-finality rate limit still enabled after RemoveChain");
+        assertEq(ffOutAfter.capacity, 0, "fast-finality rate-limit capacity not cleared after RemoveChain");
+    }
+
+    /// @notice REGRESSION for the fence-before-read fix. Runs RemoveChain's WHOLE `_removeChain` body
+    ///         against a faithful 1.5.0 pool (singular getRemotePool only, NO plural getRemotePools).
+    ///         The body must resolve the version first and read via the version-safe helper, then emit
+    ///         the 1.5.0 `allowed:false` removal encoding — which the mock records. On the pre-fix code
+    ///         (raw plural getRemotePools before dispatch) this reverts on the absent plural getter and
+    ///         never completes; confirmed by temporarily reverting the fix in RemoveChain.s.sol (the
+    ///         invoke reverts) and then restoring it (this test passes).
+    function test_RemoveChain_150Pool_FullBodyUsesVersionSafeReadThenLegacyEncoding() public {
+        Mock150PoolWithApply pool150 = new Mock150PoolWithApply(abi.encode(REMOTE_POOL));
+
+        new RemoveChainHarness().invoke(address(pool150), MANTLE_SEPOLIA_SELECTOR, "MANTLE_SEPOLIA", 5003);
+
+        ITokenPoolV150.ChainUpdate[] memory expected = new ITokenPoolV150.ChainUpdate[](1);
+        expected[0] = ITokenPoolV150.ChainUpdate({
+            remoteChainSelector: MANTLE_SEPOLIA_SELECTOR,
+            allowed: false,
+            remotePoolAddress: "",
+            remoteTokenAddress: "",
+            outboundRateLimiterConfig: RateLimiter.Config({isEnabled: false, capacity: 0, rate: 0}),
+            inboundRateLimiterConfig: RateLimiter.Config({isEnabled: false, capacity: 0, rate: 0})
+        });
+        assertEq(
+            pool150.lastApplyChainUpdatesCalldata(),
+            abi.encodeCall(ITokenPoolV150.applyChainUpdates, (expected)),
+            "1.5.0 body did not emit the allowed:false removal encoding through the version-safe read"
+        );
+    }
+
+    /// @notice Last-pool footgun + recovery on the real 2.0.0 fixture. Removing remote pools one by one
+    ///         with RemoveRemotePool NEVER drops the chain: after the LAST pool is gone the chain is
+    ///         still `isSupportedChain==true` but holds ZERO pools, at which point any inbound
+    ///         releaseOrMint from that selector reverts `InvalidSourcePoolAddress` (TokenPool.sol:483-485,
+    ///         `isRemotePool` finds no match — driving a real OffRamp in-fork is impractical, so the
+    ///         zero-pool state is asserted and the consequence cited). Only RemoveChain fully unsupports
+    ///         the lane.
+    function test_RemoveRemotePool_LastPool_LeavesChainSupportedZeroPools_ThenRemoveChain() public {
+        (, address poolAddress) = deployTokenAndPoolFixture();
+        TokenPool pool = TokenPool(poolAddress);
+        address owner = pool.owner();
+
+        bytes[] memory twoPools = new bytes[](2);
+        twoPools[0] = abi.encode(REMOTE_POOL);
+        twoPools[1] = abi.encode(REMOTE_POOL_2);
+        _exec(owner, _addMantleLane(poolAddress, twoPools, true));
+        assertEq(pool.getRemotePools(MANTLE_SEPOLIA_SELECTOR).length, 2, "precondition: two remote pools");
+
+        RemoveRemotePoolHarness rrp = new RemoveRemotePoolHarness();
+
+        // Remove the first pool: chain stays supported, one pool remains.
+        rrp.invoke(poolAddress, REMOTE_POOL, MANTLE_SEPOLIA_SELECTOR, "MANTLE_SEPOLIA", 5003);
+        assertTrue(pool.isSupportedChain(MANTLE_SEPOLIA_SELECTOR), "chain dropped after first removeRemotePool");
+        assertEq(pool.getRemotePools(MANTLE_SEPOLIA_SELECTOR).length, 1, "expected one pool left");
+
+        // Remove the LAST pool: chain STILL supported, but zero pools -> inbound releaseOrMint would
+        // revert InvalidSourcePoolAddress. removeRemotePool alone can never tear the lane down.
+        rrp.invoke(poolAddress, REMOTE_POOL_2, MANTLE_SEPOLIA_SELECTOR, "MANTLE_SEPOLIA", 5003);
+        assertTrue(pool.isSupportedChain(MANTLE_SEPOLIA_SELECTOR), "chain must stay supported-with-zero-pools");
+        assertEq(pool.getRemotePools(MANTLE_SEPOLIA_SELECTOR).length, 0, "expected zero pools (the footgun state)");
+
+        // Recovery: RemoveChain finishes the teardown the pool-by-pool removals could not.
+        new RemoveChainHarness().invoke(poolAddress, MANTLE_SEPOLIA_SELECTOR, "MANTLE_SEPOLIA", 5003);
+        assertFalse(pool.isSupportedChain(MANTLE_SEPOLIA_SELECTOR), "RemoveChain did not fully unsupport the lane");
+        uint64[] memory supported = pool.getSupportedChains();
+        for (uint256 i = 0; i < supported.length; i++) {
+            assertTrue(
+                supported[i] != MANTLE_SEPOLIA_SELECTOR, "selector still in getSupportedChains after RemoveChain"
+            );
+        }
+    }
+
+    function test_RemoveChain_UnsupportedChain_FriendlyPrecheck() public {
+        MockUnsupportedChainPool pool = new MockUnsupportedChainPool();
+        RemoveChainHarness script = new RemoveChainHarness();
+
+        try script.invoke(address(pool), MANTLE_SEPOLIA_SELECTOR, "MANTLE_SEPOLIA", 5003) {
+            revert("RemoveChain unexpectedly succeeded on an unsupported chain");
+        } catch Error(string memory reason) {
+            assertTrue(_contains(reason, "Remote chain not supported on this pool (nothing to remove)"), reason);
+            assertTrue(_contains(reason, "MANTLE_SEPOLIA"), reason);
+        }
+    }
+
+    function _addMantleLane(address poolAddress, bytes[] memory remotePools, bool rateLimitEnabled)
+        internal
+        pure
+        returns (CctActions.Call[] memory)
+    {
+        uint64[] memory removes = new uint64[](0);
+        TokenPool.ChainUpdate[] memory adds = new TokenPool.ChainUpdate[](1);
+        adds[0] = TokenPool.ChainUpdate({
+            remoteChainSelector: MANTLE_SEPOLIA_SELECTOR,
+            remotePoolAddresses: remotePools,
+            remoteTokenAddress: abi.encode(REMOTE_TOKEN),
+            outboundRateLimiterConfig: RateLimiter.Config({
+                isEnabled: rateLimitEnabled,
+                capacity: rateLimitEnabled ? OUTBOUND_CAPACITY : 0,
+                rate: rateLimitEnabled ? OUTBOUND_RATE : 0
+            }),
+            inboundRateLimiterConfig: RateLimiter.Config({isEnabled: false, capacity: 0, rate: 0})
+        });
+        return CctActions.applyChainUpdates(poolAddress, removes, adds);
+    }
+
+    function _contains(string memory s, string memory needle) internal pure returns (bool) {
+        bytes memory b = bytes(s);
+        bytes memory n = bytes(needle);
         if (n.length > b.length) return false;
         for (uint256 i = 0; i + n.length <= b.length; i++) {
             bool matched = true;
