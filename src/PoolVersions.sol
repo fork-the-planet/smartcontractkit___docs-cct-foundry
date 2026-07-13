@@ -139,7 +139,10 @@ library PoolVersions {
     /// @notice Parses an exact version token (e.g. `1.6.1`) to its catalog entry; `UNKNOWN` for
     ///         anything not cataloged (including `-dev` builds and empty strings).
     function fromVersionToken(string memory token) internal pure returns (Version) {
-        bytes32 h = keccak256(bytes(token));
+        bytes32 h;
+        assembly {
+            h := keccak256(add(token, 0x20), mload(token))
+        }
         if (h == keccak256(bytes("1.5.0"))) return Version.V1_5_0;
         if (h == keccak256(bytes("1.5.1"))) return Version.V1_5_1;
         if (h == keccak256(bytes("1.6.1"))) return Version.V1_6_1;

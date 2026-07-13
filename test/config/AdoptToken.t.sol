@@ -85,7 +85,7 @@ contract AdoptTokenForkTest is Test {
     // Validation against live externally deployed contracts
     // ─────────────────────────────────────────────────────────────────────────
 
-    function test_Validate_PlainOwnableToken_NoPool() public {
+    function test_Validate_PlainOwnableToken_NoPool() public view {
         AdoptToken.AdoptPlan memory plan =
             script.validateAdoption(sepoliaJson, block.chainid, PLAIN_OWNABLE_TOKEN, address(0));
         assertEq(plan.token, PLAIN_OWNABLE_TOKEN, "token");
@@ -93,13 +93,13 @@ contract AdoptTokenForkTest is Test {
         assertEq(bytes(plan.poolTypeAndVersion).length, 0, "no pool adopted");
     }
 
-    function test_Validate_CctTokenWithPool() public {
+    function test_Validate_CctTokenWithPool() public view {
         AdoptToken.AdoptPlan memory plan = script.validateAdoption(sepoliaJson, block.chainid, CCT_TOKEN, CCT_POOL_200);
         assertEq(plan.adminPath, "getCCIPAdmin()", "CCT token must resolve the getCCIPAdmin() path");
         assertEq(plan.poolTypeAndVersion, "BurnMintTokenPool 2.0.0", "pool type and version");
     }
 
-    function test_Validate_V150Pool() public {
+    function test_Validate_V150Pool() public view {
         AdoptToken.AdoptPlan memory plan = script.validateAdoption(sepoliaJson, block.chainid, MATRIX_TOKEN, POOL_150);
         assertEq(plan.poolTypeAndVersion, "BurnMintTokenPool 1.5.0", "1.5.0 pool adopts");
     }
@@ -121,7 +121,7 @@ contract AdoptTokenForkTest is Test {
         script.validateAdoption(sepoliaJson, block.chainid, PLAIN_OWNABLE_TOKEN, CCT_POOL_200);
     }
 
-    function test_Validate_RejectsDevStampedPool() public {
+    function test_Validate_RejectsDevStampedPool() public view {
         try script.validateAdoption(sepoliaJson, block.chainid, MATRIX_TOKEN, DEV_STAMPED_POOL) {
             revert("dev-stamped pool unexpectedly adopted");
         } catch Error(string memory reason) {

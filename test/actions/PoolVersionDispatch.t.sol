@@ -359,7 +359,7 @@ contract PoolVersionDispatchTest is Test {
         _assertContains(reason, "token address instead of the pool");
     }
 
-    function test_Refusal_NotAPool_CodelessAddress() public {
+    function test_Refusal_NotAPool_CodelessAddress() public view {
         // A call to a codeless address returns empty data and the string decode is uncatchable, so
         // the resolver must check code length first and refuse by name.
         address codeless = address(uint160(uint256(keccak256("codeless-address-fixture"))));

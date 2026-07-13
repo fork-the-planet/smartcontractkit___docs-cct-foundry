@@ -83,6 +83,7 @@ contract AdoptToken is Script {
     ///         wrong or unusable entry; returns the fully resolved plan otherwise.
     function validateAdoption(string memory json, uint256 chainId, address token, address pool)
         public
+        view
         returns (AdoptPlan memory plan)
     {
         require(token != address(0), "TOKEN is required");

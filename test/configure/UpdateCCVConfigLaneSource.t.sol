@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.24;
 
-import {Test} from "forge-std/Test.sol";
 import {Strings} from "@openzeppelin/contracts@5.3.0/utils/Strings.sol";
 import {AdvancedPoolHooks} from "@chainlink/contracts-ccip/contracts/pools/AdvancedPoolHooks.sol";
 import {UpdateCCVConfig} from "../../script/configure/ccv/UpdateCCVConfig.s.sol";
