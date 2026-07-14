@@ -37,32 +37,39 @@ library SafeTxHash {
     }
 
     /// @notice The Safe's EIP-712 domain separator, recomputed locally.
-    function domainSeparator(uint256 chainId, address safe) internal pure returns (bytes32) {
-        return keccak256(abi.encode(DOMAIN_SEPARATOR_TYPEHASH, chainId, safe));
+    function domainSeparator(uint256 chainId, address safe) internal pure returns (bytes32 result) {
+        bytes memory encoded = abi.encode(DOMAIN_SEPARATOR_TYPEHASH, chainId, safe);
+        assembly {
+            result := keccak256(add(encoded, 0x20), mload(encoded))
+        }
     }
 
     /// @notice The EIP-712 struct hash of one SafeTx (dynamic `data` hashed per EIP-712).
-    function structHash(SafeTx memory t) internal pure returns (bytes32) {
-        return keccak256(
-            abi.encode(
-                SAFE_TX_TYPEHASH,
-                t.to,
-                t.value,
-                keccak256(t.data),
-                t.operation,
-                t.safeTxGas,
-                t.baseGas,
-                t.gasPrice,
-                t.gasToken,
-                t.refundReceiver,
-                t.nonce
-            )
+    function structHash(SafeTx memory t) internal pure returns (bytes32 result) {
+        bytes memory encoded = abi.encode(
+            SAFE_TX_TYPEHASH,
+            t.to,
+            t.value,
+            keccak256(t.data),
+            t.operation,
+            t.safeTxGas,
+            t.baseGas,
+            t.gasPrice,
+            t.gasToken,
+            t.refundReceiver,
+            t.nonce
         );
+        assembly {
+            result := keccak256(add(encoded, 0x20), mload(encoded))
+        }
     }
 
     /// @notice The full `safeTxHash`: `keccak256(0x1901 || domainSeparator || structHash)`. Must equal
     ///         the Safe's on-chain `getTransactionHash` for the same inputs.
-    function compute(uint256 chainId, address safe, SafeTx memory t) internal pure returns (bytes32) {
-        return keccak256(abi.encodePacked(bytes1(0x19), bytes1(0x01), domainSeparator(chainId, safe), structHash(t)));
+    function compute(uint256 chainId, address safe, SafeTx memory t) internal pure returns (bytes32 result) {
+        bytes memory encoded = abi.encodePacked(bytes1(0x19), bytes1(0x01), domainSeparator(chainId, safe), structHash(t));
+        assembly {
+            result := keccak256(add(encoded, 0x20), mload(encoded))
+        }
     }
 }
