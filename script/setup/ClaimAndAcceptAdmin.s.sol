@@ -8,11 +8,25 @@ import {IOwner} from "@chainlink/contracts-ccip/contracts/interfaces/IOwner.sol"
 import {CctActions} from "../../src/actions/CctActions.sol";
 import {EoaExecutor} from "../../src/base/EoaExecutor.s.sol";
 
-contract ClaimAdmin is EoaExecutor {
+/// @notice Claims AND accepts the CCIP token admin as ONE atomic registration pair — the claim sets
+/// the executing account as the registry's pending administrator, so the accept in the same batch
+/// succeeds. This is the batch-friendly counterpart of running `ClaimAdmin` then `AcceptAdminRole`:
+/// `AcceptAdminRole` preflight-requires the pending administrator to ALREADY be set when the script
+/// runs, so the two-script sequence cannot be composed into one deferred Safe batch — this wrapper
+/// can, because the pair executes together. It uses the same claim-path probe as `ClaimAdmin`
+/// (getCCIPAdmin() preferred, owner() fallback).
+///
+/// In Safe mode, set CCIP_ADMIN_ADDRESS to the Safe: the Safe is the account executing the pair, so
+/// it must be the token's current CCIP admin (or owner) and becomes the registry administrator.
+///
+/// Environment Variables:
+///   TOKEN / <CHAIN>_TOKEN   (required) the token to register
+///   CCIP_ADMIN_ADDRESS      (optional) expected current admin; defaults to the executing account
+///                           (the Safe in safe mode, the broadcaster otherwise).
+contract ClaimAndAcceptAdmin is EoaExecutor {
     HelperConfig public helperConfig;
 
     function run() external {
-        // Initialize HelperConfig
         helperConfig = new HelperConfig();
 
         uint256 chainId = block.chainid;
@@ -21,10 +35,10 @@ contract ClaimAdmin is EoaExecutor {
 
         console.log("");
         console.log("========================================");
-        console.log(unicode"👑 Claim Token Admin");
+        console.log(unicode"👑 Claim + Accept Token Admin (one batch)");
         console.log("========================================");
         console.log(string.concat("Chain:        ", chainName));
-        console.log(string.concat("Action:       ", "Claim token admin"));
+        console.log(string.concat("Action:       ", "Claim and accept token admin atomically"));
         console.log("========================================");
         console.log("");
 
@@ -37,20 +51,18 @@ contract ClaimAdmin is EoaExecutor {
             )
         );
 
-        // Get RegistryModuleOwnerCustom address from config
         address registryModuleOwnerCustom = config.registryModuleOwnerCustom;
         require(registryModuleOwnerCustom != address(0), "RegistryModuleOwnerCustom not configured for this network");
+        address tokenAdminRegistry = config.tokenAdminRegistry;
+        require(tokenAdminRegistry != address(0), "TokenAdminRegistry not configured for this network");
 
-        // Try to detect which admin function the token supports
+        // Same claim-path probe as ClaimAdmin: getCCIPAdmin() preferred, owner() fallback.
         address currentAdmin;
         bool useCCIPAdmin = false;
-
-        // Try getCCIPAdmin() first
         try IGetCCIPAdmin(tokenAddress).getCCIPAdmin() returns (address admin) {
             currentAdmin = admin;
             useCCIPAdmin = true;
         } catch {
-            // If getCCIPAdmin() fails, try owner()
             try IOwner(tokenAddress).owner() returns (address admin) {
                 currentAdmin = admin;
                 useCCIPAdmin = false;
@@ -59,34 +71,37 @@ contract ClaimAdmin is EoaExecutor {
             }
         }
 
-        // The account that must execute the claim: the Safe in safe mode, the broadcaster otherwise.
+        // The account that must execute the pair: the Safe in safe mode, the broadcaster otherwise.
         address ccipAdminAddress = vm.envOr("CCIP_ADMIN_ADDRESS", executingAccount());
 
-        console.log("Claim Admin Parameters:");
+        console.log("Registration Pair Parameters:");
         console.log(string.concat("  Token:                        ", vm.toString(tokenAddress)));
         console.log(string.concat("  Current Admin:                ", vm.toString(currentAdmin)));
         console.log(string.concat("  Expected Admin:               ", vm.toString(ccipAdminAddress)));
         console.log(string.concat("  Registry Module:              ", vm.toString(registryModuleOwnerCustom)));
+        console.log(string.concat("  TokenAdminRegistry:           ", vm.toString(tokenAdminRegistry)));
         console.log(string.concat("  Admin Method:                 ", useCCIPAdmin ? "getCCIPAdmin()" : "owner()"));
         console.log("");
 
         require(currentAdmin == ccipAdminAddress, "Admin of token doesn't match the expected admin address");
 
-        // Build the claim through the shared action layer and broadcast it as an EOA.
         CctActions.Call[] memory calls;
         if (useCCIPAdmin) {
-            console.log(string.concat("\n[Step 1] Claiming admin for token via getCCIPAdmin() on ", chainName));
-            calls = CctActions.registerAdminViaGetCCIPAdmin(registryModuleOwnerCustom, tokenAddress);
+            console.log(string.concat("\n[Step 1] Claiming + accepting admin via getCCIPAdmin() on ", chainName));
+            calls = CctActions.registerAndAcceptAdminViaGetCCIPAdmin(
+                registryModuleOwnerCustom, tokenAdminRegistry, tokenAddress
+            );
         } else {
-            console.log(string.concat("\n[Step 1] Claiming admin for token via owner() on ", chainName));
-            calls = CctActions.registerAdminViaOwner(registryModuleOwnerCustom, tokenAddress);
+            console.log(string.concat("\n[Step 1] Claiming + accepting admin via owner() on ", chainName));
+            calls =
+                CctActions.registerAndAcceptAdminViaOwner(registryModuleOwnerCustom, tokenAdminRegistry, tokenAddress);
         }
         executeCalls(calls);
-        console.log(unicode"✅ Admin claimed successfully!");
+        console.log(unicode"✅ Registration pair executed!");
 
         console.log("");
         console.log("========================================");
-        console.log(string.concat(unicode"✅ Admin Claim Complete on ", chainName, "!"));
+        console.log(string.concat(unicode"✅ Claim + Accept Complete on ", chainName, "!"));
         console.log("========================================");
         console.log(string.concat("Token Address: ", vm.toString(tokenAddress)));
         console.log(string.concat("Token Address: ", helperConfig.getExplorerUrl(chainId, "/address/", tokenAddress)));
