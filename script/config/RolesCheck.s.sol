@@ -5,6 +5,7 @@ import {Script} from "forge-std/Script.sol";
 import {console} from "forge-std/console.sol";
 
 import {RolesAuditor} from "../../src/roles/RolesAuditor.sol";
+import {ProjectStore} from "../../src/utils/ProjectStore.sol";
 
 /// @title RolesCheck
 /// @notice **`make roles-check CHAIN=<name>` — READ-ONLY reconcile of the declared `roles{}` against
@@ -20,14 +21,18 @@ import {RolesAuditor} from "../../src/roles/RolesAuditor.sol";
 ///   - `ROLES_DRIFT`       — at least one declared field mismatches the live chain
 contract RolesCheck is Script {
     function run(string memory name) public {
-        string memory path = string.concat("config/chains/", name, ".json");
-        require(vm.exists(path), string.concat("unknown chain '", name, "' - no ", path));
-        string memory json = vm.readFile(path);
+        // Chain FACTS come from config/chains (pure API); the DECLARED roles{} comes from the project store.
+        string memory configPath = string.concat("config/chains/", name, ".json");
+        require(vm.exists(configPath), string.concat("unknown chain '", name, "' - no ", configPath));
+        string memory configJson = vm.readFile(configPath);
         require(
-            keccak256(bytes(vm.parseJsonString(json, ".chainFamily"))) == keccak256(bytes("evm")),
+            keccak256(bytes(vm.parseJsonString(configJson, ".chainFamily"))) == keccak256(bytes("evm")),
             string.concat("[roles-check] ", name, " is not an EVM chain - roles{} reconcile covers EVM only")
         );
-        if (!vm.keyExistsJson(json, ".roles")) {
+
+        ProjectStore.requireSchema(name); // named error on a wrong-schema/corrupt project file
+        string memory projectPath = ProjectStore.path(name);
+        if (!vm.exists(projectPath) || !vm.keyExistsJson(vm.readFile(projectPath), ".roles.token")) {
             console.log(
                 string.concat(
                     "[roles-check] NO_ROLES_DECLARED for ", name, " - bootstrap with: make snapshot-chain CHAIN=", name
@@ -35,7 +40,8 @@ contract RolesCheck is Script {
             );
             return;
         }
-        string memory rpcEnv = vm.parseJsonString(json, ".rpcEnv");
+        string memory projectJson = vm.readFile(projectPath);
+        string memory rpcEnv = vm.parseJsonString(configJson, ".rpcEnv");
         string memory url = vm.envOr(rpcEnv, string(""));
         require(
             bytes(url).length != 0,
@@ -46,11 +52,11 @@ contract RolesCheck is Script {
             revert(string.concat("[roles-check] RPC_UNAVAILABLE: could not fork via ", rpcEnv));
         }
         require(
-            block.chainid == vm.parseJsonUint(json, ".chainId"),
+            block.chainid == vm.parseJsonUint(configJson, ".chainId"),
             string.concat("[roles-check] RPC ", rpcEnv, " points at the wrong chainId for ", name)
         );
 
-        RolesAuditor.Result memory r = (new RolesAuditor()).auditJson(name, json);
+        RolesAuditor.Result memory r = (new RolesAuditor()).auditJson(name, projectJson);
         if (r.fails != 0) {
             revert(
                 string.concat(

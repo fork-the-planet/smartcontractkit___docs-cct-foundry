@@ -8,13 +8,13 @@ Foundry scripts for deploying and managing cross-chain tokens using Chainlink CC
 
 Everything a fresh machine needs, in one place:
 
-| Tool | Needed for | Check |
-|---|---|---|
-| [Foundry](https://book.getfoundry.sh/getting-started/installation) (`forge`, `cast`) | building, testing, and every deploy/config script | `forge --version` |
-| Node.js + npm | installing the Solidity dependencies (`npm install`) | `npm --version` |
-| `make` | the golden-path targets in the `Makefile` (preinstalled on macOS/Linux; on Windows use WSL) | `make --version` |
-| `bash` | the thin wrapper scripts under `script/config/` | `bash --version` |
-| `curl` + `jq` | **only** the chain-config sync tooling (fetching the [CCIP API](https://api.ccip.chain.link/v2)) — deploys don't use them | `curl --version`, `jq --version` |
+| Tool                                                                                 | Needed for                                                                                                                | Check                            |
+| ------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------- | -------------------------------- |
+| [Foundry](https://book.getfoundry.sh/getting-started/installation) (`forge`, `cast`) | building, testing, and every deploy/config script                                                                         | `forge --version`                |
+| Node.js + npm                                                                        | installing the Solidity dependencies (`npm install`)                                                                      | `npm --version`                  |
+| `make`                                                                               | the golden-path targets in the `Makefile` (preinstalled on macOS/Linux; on Windows use WSL)                               | `make --version`                 |
+| `bash`                                                                               | the thin wrapper scripts under `script/config/`                                                                           | `bash --version`                 |
+| `curl` + `jq`                                                                        | **only** the chain-config sync tooling (fetching the [CCIP API](https://api.ccip.chain.link/v2)) — deploys don't use them | `curl --version`, `jq --version` |
 
 The chain-config sync tooling (`make discover` / `add-chain` / `sync` / `sync-check` / `doctor`) needs **no RPC URL, no keystore, and no API key** — it only reads the public CCIP API. `make tools` runs this same presence check and prints install hints for anything missing.
 
@@ -22,46 +22,45 @@ The chain-config sync tooling (`make discover` / `add-chain` / `sync` / `sync-ch
 
 2. Install dependencies:
 
-    ```bash
-    npm install
-    ```
+   ```bash
+   npm install
+   ```
 
 3. Create an encrypted Foundry keystore (if you don't have one already):
 
-    ```bash
-    cast wallet import your_keystore_name --interactive
-    ```
+   ```bash
+   cast wallet import your_keystore_name --interactive
+   ```
 
 4. Set up environment variables in `.env`. You can copy `.env.example` to `.env` and fill in your values:
 
-    ```bash
-    cp .env.example .env
-    ```
+   ```bash
+   cp .env.example .env
+   ```
 
-    ```bash
-    # Keystore name (created via `cast wallet import`)
-    KEYSTORE_NAME=your_keystore_name
+   ```bash
+   # Keystore name (created via `cast wallet import`)
+   KEYSTORE_NAME=your_keystore_name
 
-    # RPC URLs
-    ETHEREUM_SEPOLIA_RPC_URL=your_eth_sepolia_rpc
-    MANTLE_SEPOLIA_RPC_URL=your_mantle_sepolia_rpc
+   # RPC URLs
+   ETHEREUM_SEPOLIA_RPC_URL=your_eth_sepolia_rpc
+   MANTLE_SEPOLIA_RPC_URL=your_mantle_sepolia_rpc
 
-    # Etherscan API key (required only if you pass --verify to deployment scripts)
-    ETHERSCAN_API_KEY=your_etherscan_api_key
-    ```
+   # Etherscan API key (required only if you pass --verify to deployment scripts)
+   ETHERSCAN_API_KEY=your_etherscan_api_key
+   ```
 
 5. Load environment variables:
 
-    ```bash
-    source .env
-    ```
-
+   ```bash
+   source .env
+   ```
 
 6. Build the project:
 
-    ```bash
-    forge build
-    ```
+   ```bash
+   forge build
+   ```
 
 ## Deployment Flow
 
@@ -69,15 +68,15 @@ The chain-config sync tooling (`make discover` / `add-chain` / `sync` / `sync-ch
 
 Configure token parameters in `script/input/token.json` (see the [Configuration](#configuration) section), or override any field with environment variables:
 
-| Env var | Default (from `token.json`) |
-|---|---|
-| `TOKEN_NAME` | `.name` |
-| `TOKEN_SYMBOL` | `.symbol` |
-| `TOKEN_DECIMALS` | `.decimals` |
-| `TOKEN_MAX_SUPPLY` | `.maxSupply` |
-| `TOKEN_PRE_MINT` | `.preMint` |
+| Env var                    | Default (from `token.json`)           |
+| -------------------------- | ------------------------------------- |
+| `TOKEN_NAME`               | `.name`                               |
+| `TOKEN_SYMBOL`             | `.symbol`                             |
+| `TOKEN_DECIMALS`           | `.decimals`                           |
+| `TOKEN_MAX_SUPPLY`         | `.maxSupply`                          |
+| `TOKEN_PRE_MINT`           | `.preMint`                            |
 | `TOKEN_PRE_MINT_RECIPIENT` | broadcaster (if `TOKEN_PRE_MINT` > 0) |
-| `CCIP_ADMIN_ADDRESS` | `msg.sender` (broadcaster) |
+| `CCIP_ADMIN_ADDRESS`       | `msg.sender` (broadcaster)            |
 
 ```bash
 # Deploy on Ethereum Sepolia
@@ -106,12 +105,14 @@ forge script \
 Optional: Set `ROLES_RECIPIENT` to grant mint/burn roles to a specific address (defaults to the deployer).
 
 After each deployment, the token address is automatically saved to:
-```
-script/deployments/tokens/{CHAIN_NAME_IDENTIFIER}/{timestamp}-{SYMBOL}-Token.json
-```
-The file uses the env var name as the key (e.g. `ETHEREUM_SEPOLIA_TOKEN`). If you need to retrieve the deployed address later, open the file — the key is the env var name and the value is the address, so you can copy both directly into an `export` command. The `script/deployments/` directory is ignored by `.gitignore` — files are local to each user.
 
-A broadcast deploy also records the address in the [address registry](#deployed-address-registry--addresseschainidjson-the-default) (`addresses/<chainId>.json`), so **subsequent scripts resolve the token automatically — no `export` needed**. Re-running the deploy on the same chain is refused while the registry holds a live address (set `FORCE_REDEPLOY=true` to deploy a replacement).
+```
+history/tokens/{selectorName}/{timestamp}-{SYMBOL}-Token.json
+```
+
+The file uses the env var name as the key (e.g. `ETHEREUM_SEPOLIA_TOKEN`). If you need to retrieve the deployed address later, open the file — the key is the env var name and the value is the address, so you can copy both directly into an `export` command. The `history/` directory is ignored by `.gitignore` — files are local to each user.
+
+A broadcast deploy also records the address in the [project store](#project-store--projectselectornamejson-the-default) (the `addresses{}` subtree of `project/<selectorName>.json`), so **subsequent scripts resolve the token automatically — no `export` needed**. Re-running the deploy on the same chain is refused while the registry holds a live address (set `FORCE_REDEPLOY=true` to deploy a replacement).
 
 To override the registry address for a session, choose one approach:
 
@@ -153,9 +154,11 @@ forge script \
 ```
 
 After each deployment, the pool address is automatically saved to:
+
 ```
-script/deployments/token-pools/{CHAIN_NAME_IDENTIFIER}/{timestamp}-{SYMBOL}-BurnMintTokenPool.json
+history/token-pools/{selectorName}/{timestamp}-{SYMBOL}-BurnMintTokenPool.json
 ```
+
 The file records the pool address under `{CHAIN_NAME_IDENTIFIER}_TOKEN_POOL` and its bound token address under `{CHAIN_NAME_IDENTIFIER}_TOKEN`.
 
 Optional: Set `POOL_HOOKS=0x...` to attach an `AdvancedPoolHooks` contract at deploy time. Set `DECIMALS=<n>` if your token does not implement the optional `decimals()` ERC20 function — the script will fall back to this value and fail if neither is available.
@@ -295,7 +298,7 @@ The `LockReleaseTokenPool` requires the `ERC20LockBox` at deploy time, and the l
 
 `LOCK_BOX` is required and must be the address of a deployed `ERC20LockBox` for the token. Optional: Set `POOL_HOOKS=0x...` to attach an already-deployed `AdvancedPoolHooks` contract at deploy time. Set `DECIMALS=<n>` if your token does not implement the optional `decimals()` ERC20 function. When deploying the lockbox, you can optionally set `AUTHORIZED_CALLERS` (CSV or JSON array) to authorize addresses immediately — useful for authorizing the deployer or token issuer to deposit/withdraw liquidity initially.
 
-A broadcast deploy records the pool (and lockbox) address in the [address registry](#deployed-address-registry--addresseschainidjson-the-default), so **subsequent scripts resolve it automatically — no `export` needed** (the LockRelease pool deploy also resolves `LOCK_BOX` from the registry). To override the registry address for a session, choose one approach:
+A broadcast deploy records the pool (and lockbox) address in the [project store](#project-store--projectselectornamejson-the-default), so **subsequent scripts resolve it automatically — no `export` needed** (the LockRelease pool deploy also resolves `LOCK_BOX` from the registry). To override the registry address for a session, choose one approach:
 
 ```bash
 # Option A: export for the session (persists across all commands in the current terminal)
@@ -307,8 +310,9 @@ TOKEN_POOL=0x... forge script script/setup/SetPool.s.sol --rpc-url $ETHEREUM_SEP
 ```
 
 Each deployment is automatically saved:
-- ERC20LockBox → `script/deployments/lock-boxes/{CHAIN_NAME_IDENTIFIER}/{timestamp}-{SYMBOL}-LockBox.json` — keys: `LOCK_BOX`, `{CHAIN_NAME_IDENTIFIER}_TOKEN`
-- LockReleaseTokenPool → `script/deployments/token-pools/{CHAIN_NAME_IDENTIFIER}/{timestamp}-{SYMBOL}-LockReleaseTokenPool.json` — keys: `{CHAIN_NAME_IDENTIFIER}_TOKEN_POOL`, `LOCK_BOX`, `{CHAIN_NAME_IDENTIFIER}_TOKEN`
+
+- ERC20LockBox → `history/lock-boxes/{selectorName}/{timestamp}-{SYMBOL}-LockBox.json` — keys: `LOCK_BOX`, `{CHAIN_NAME_IDENTIFIER}_TOKEN`
+- LockReleaseTokenPool → `history/token-pools/{selectorName}/{timestamp}-{SYMBOL}-LockReleaseTokenPool.json` — keys: `{CHAIN_NAME_IDENTIFIER}_TOKEN_POOL`, `LOCK_BOX`, `{CHAIN_NAME_IDENTIFIER}_TOKEN`
 
 To verify the lockbox address is correctly attached to the pool:
 
@@ -407,7 +411,7 @@ This script is idempotent — if the destination chain is already configured on 
 Rate limits resolve per direction through a two-rung ladder, matching the repo's `inline > env > registry` idiom:
 
 1. **Rate-limit env vars set** — the env values win, exactly as documented in the table below. This is the explicit override path (for example, an incident-response throttle). If the local chain config declares a diverging `lanes{}` policy for the destination, the script prints a one-line notice naming both values, and the closing output prints the exact `make add-lane` command to bring the declaration in line — `make doctor` WARNs until the two agree. An apply never writes `lanes{}` back: the declaration is owner intent, reconciled through a reviewed edit.
-2. **Env vars unset** — the buckets come from the declared `lanes{}` entry in `config/chains/<local>.json` (matched by the remote's config name, falling back to `remoteSelector` equality): `capacity`/`rate` drive the outbound bucket (enabled when either is non-zero), and the optional `inbound{capacity,rate}` block drives the inbound bucket. An absent `inbound{}` block keeps the default: disabled.
+2. **Env vars unset** — the buckets come from the declared `lanes{}` entry in the local project store `project/<local>.json` (matched by the remote's config name, falling back to `remoteSelector` equality): `capacity`/`rate` drive the outbound bucket (enabled when either is non-zero), and the optional `inbound{capacity,rate}` block drives the inbound bucket. An absent `inbound{}` block keeps the default: disabled.
 
 With neither env vars nor a `lanes{}` entry, rate limiting stays disabled (the historical default) and the console says so. The golden path is declare once, apply from the declaration: `make add-lane` (see [Chain config tooling](#chain-config-tooling---discover-add-sync-verify)), then run the script with no rate-limit env vars.
 
@@ -467,32 +471,32 @@ DEST_CHAIN=MANTLE_SEPOLIA \
   --broadcast
 ```
 
-| Env var | Required | Description |
-|---|---|---|
-| `DEST_CHAIN` | Yes | Destination chain name (e.g. `MANTLE_SEPOLIA`) |
-| `TOKEN_POOL` | No | Inline alias for the source chain pool address. Takes priority over `{CHAIN}_TOKEN_POOL`. |
-| `DEST_TOKEN_POOL` | No | Inline alias for the destination chain pool address. Takes priority over `{DEST_CHAIN}_TOKEN_POOL`. |
-| `DEST_TOKEN` | No | Inline alias for the destination chain token address. Takes priority over `{DEST_CHAIN}_TOKEN`. |
-| `OUTBOUND_RATE_LIMIT_CAPACITY` | No | Token bucket capacity for outbound transfers |
-| `OUTBOUND_RATE_LIMIT_RATE` | No | Token bucket refill rate (tokens/second) for outbound transfers |
-| `OUTBOUND_RATE_LIMIT_ENABLED` | No | Override `isEnabled` explicitly (`true`/`false`; defaults to `true` when CAPACITY or RATE are set) |
-| `INBOUND_RATE_LIMIT_CAPACITY` | No | Token bucket capacity for inbound transfers |
-| `INBOUND_RATE_LIMIT_RATE` | No | Token bucket refill rate (tokens/second) for inbound transfers |
-| `INBOUND_RATE_LIMIT_ENABLED` | No | Override `isEnabled` explicitly (`true`/`false`; defaults to `true` when CAPACITY or RATE are set) |
+| Env var                        | Required | Description                                                                                         |
+| ------------------------------ | -------- | --------------------------------------------------------------------------------------------------- |
+| `DEST_CHAIN`                   | Yes      | Destination chain name (e.g. `MANTLE_SEPOLIA`)                                                      |
+| `TOKEN_POOL`                   | No       | Inline alias for the source chain pool address. Takes priority over `{CHAIN}_TOKEN_POOL`.           |
+| `DEST_TOKEN_POOL`              | No       | Inline alias for the destination chain pool address. Takes priority over `{DEST_CHAIN}_TOKEN_POOL`. |
+| `DEST_TOKEN`                   | No       | Inline alias for the destination chain token address. Takes priority over `{DEST_CHAIN}_TOKEN`.     |
+| `OUTBOUND_RATE_LIMIT_CAPACITY` | No       | Token bucket capacity for outbound transfers                                                        |
+| `OUTBOUND_RATE_LIMIT_RATE`     | No       | Token bucket refill rate (tokens/second) for outbound transfers                                     |
+| `OUTBOUND_RATE_LIMIT_ENABLED`  | No       | Override `isEnabled` explicitly (`true`/`false`; defaults to `true` when CAPACITY or RATE are set)  |
+| `INBOUND_RATE_LIMIT_CAPACITY`  | No       | Token bucket capacity for inbound transfers                                                         |
+| `INBOUND_RATE_LIMIT_RATE`      | No       | Token bucket refill rate (tokens/second) for inbound transfers                                      |
+| `INBOUND_RATE_LIMIT_ENABLED`   | No       | Override `isEnabled` explicitly (`true`/`false`; defaults to `true` when CAPACITY or RATE are set)  |
 
 > **Note:** `ApplyChainUpdates` only configures the **standard finality** rate limit bucket. To configure the fast finality bucket, run `UpdateRateLimiters` with `FAST_FINALITY=true` after the lane is set up.
 
 #### Declare vs apply: argument name mapping
 
-`make add-lane` (which declares the policy into `config/chains/<local>.json`) and the apply scripts (`ApplyChainUpdates`, `UpdateRateLimiters`) name the same rate-limit values differently. When translating a declared lane into an env-override apply, map the arguments as follows:
+`make add-lane` (which declares the policy into the local project store `project/<local>.json`) and the apply scripts (`ApplyChainUpdates`, `UpdateRateLimiters`) name the same rate-limit values differently. When translating a declared lane into an env-override apply, map the arguments as follows:
 
-| `make add-lane` argument | Apply-script env var |
-|---|---|
-| `REMOTE` | `DEST_CHAIN` |
-| `CAPACITY` | `OUTBOUND_RATE_LIMIT_CAPACITY` |
-| `RATE` | `OUTBOUND_RATE_LIMIT_RATE` |
-| `INBOUND_CAPACITY` | `INBOUND_RATE_LIMIT_CAPACITY` |
-| `INBOUND_RATE` | `INBOUND_RATE_LIMIT_RATE` |
+| `make add-lane` argument | Apply-script env var           |
+| ------------------------ | ------------------------------ |
+| `REMOTE`                 | `DEST_CHAIN`                   |
+| `CAPACITY`               | `OUTBOUND_RATE_LIMIT_CAPACITY` |
+| `RATE`                   | `OUTBOUND_RATE_LIMIT_RATE`     |
+| `INBOUND_CAPACITY`       | `INBOUND_RATE_LIMIT_CAPACITY`  |
+| `INBOUND_RATE`           | `INBOUND_RATE_LIMIT_RATE`      |
 
 `LOCAL` names the **source** chain — the chain whose pool is being configured. The apply scripts infer the source chain from the `--rpc-url` you pass (its `block.chainid`), so there is no `LOCAL` env var: point `--rpc-url` at the source chain's RPC.
 
@@ -540,20 +544,20 @@ Full details: [Configuration](#configuration) overview, the per-field [`docs/con
 
 ### Which command when
 
-| I want to... | Run |
-|---|---|
-| See which chains exist / find a selector | `make discover FILTER=<term>` |
-| Onboard a new chain | `make add-chain CHAIN=<name> SELECTOR=<sel>`, then `make doctor CHAIN=<name>` |
+| I want to...                                                                 | Run                                                                                            |
+| ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| See which chains exist / find a selector                                     | `make discover FILTER=<term>`                                                                  |
+| Onboard a new chain                                                          | `make add-chain CHAIN=<name> SELECTOR=<sel>`, then `make doctor CHAIN=<name>`                  |
 | Check whether any config drifted from the API (routine; what CI runs weekly) | `make sync-check` (CI/automation: `bash script/config/sync-check.sh` for the 0/1/2 exit codes) |
-| Inspect what the API currently has for one chain before changing anything | `make sync-preview CHAIN=<name>` |
-| Apply the API's current values | `make sync CHAIN=<name>` / `make sync-all` |
-| Declare a lane policy between two chains | `make add-lane LOCAL=<name> REMOTE=<remote> CAPACITY=<wei> RATE=<wei> [BOTH=1]` |
-| Retire a declared lane policy (undo of `add-lane`) | `make remove-lane LOCAL=<name> REMOTE=<remote> [BOTH=1]` |
-| Bring externally deployed contracts into the registry | `make adopt-token CHAIN=<name> TOKEN=<addr> [TOKEN_POOL=<addr>]` |
-| Deep-verify one chain end to end (human health check) | `make doctor CHAIN=<name>` |
-| Restore canonical formatting after a raw `forge script` run | `make fmt-config` |
+| Inspect what the API currently has for one chain before changing anything    | `make sync-preview CHAIN=<name>`                                                               |
+| Apply the API's current values                                               | `make sync CHAIN=<name>` / `make sync-all`                                                     |
+| Declare a lane policy between two chains                                     | `make add-lane LOCAL=<name> REMOTE=<remote> CAPACITY=<wei> RATE=<wei> [BOTH=1]`                |
+| Retire a declared lane policy (undo of `add-lane`)                           | `make remove-lane LOCAL=<name> REMOTE=<remote> [BOTH=1]`                                       |
+| Bring externally deployed contracts into the registry                        | `make adopt-token CHAIN=<name> TOKEN=<addr> [TOKEN_POOL=<addr>]`                               |
+| Deep-verify one chain end to end (human health check)                        | `make doctor CHAIN=<name>`                                                                     |
+| Restore canonical formatting after a raw `forge script` run                  | `make fmt-config`                                                                              |
 
-`doctor` and `sync-check` layer rather than overlap: `doctor` is the deep single-chain health check for a human (schema, identity, drift, RPC, on-chain code, registry warnings, mesh reciprocity, on-chain lane reconciliation), while `sync-check` is the fleet-wide drift verdict for routine use and CI.
+`doctor` and `sync-check` layer rather than overlap: `doctor` is the deep single-chain health check for a human (schema, identity, drift, RPC, on-chain code, registry warnings, mesh reciprocity, on-chain lane reconciliation, and declared-`roles{}` authority reconciliation), while `sync-check` is the fleet-wide drift verdict for routine use and CI.
 
 ## Ownership Management (Optional)
 
@@ -565,12 +569,12 @@ Initiates an ownership transfer for a token, token pool, pool hooks, or lockbox.
 
 For token transfers, the script auto-detects the token type and calls the appropriate function:
 
-| Detection | Token type | Transfer action | Accept required? |
-|---|---|---|---|
-| `pendingDefaultAdmin()` succeeds | CrossChainToken | `beginDefaultAdminTransfer` | Yes — run `AcceptOwnership` |
-| `pendingOwner()` + `owner()` succeed | OZ `Ownable2Step` | `transferOwnership` | Yes — run `AcceptOwnership` |
-| `owner()` only (no `pendingOwner()`) | `ConfirmedOwner` or plain `Ownable` | `transferOwnership` | Yes for `ConfirmedOwner`; plain `Ownable` transfers immediately |
-| Neither | `BurnMintERC20` v1 (plain `AccessControl`) | `grantRole` + `revokeRole` (atomic, 1-step) | No |
+| Detection                            | Token type                                 | Transfer action                             | Accept required?                                                |
+| ------------------------------------ | ------------------------------------------ | ------------------------------------------- | --------------------------------------------------------------- |
+| `pendingDefaultAdmin()` succeeds     | CrossChainToken                            | `beginDefaultAdminTransfer`                 | Yes — run `AcceptOwnership`                                     |
+| `pendingOwner()` + `owner()` succeed | OZ `Ownable2Step`                          | `transferOwnership`                         | Yes — run `AcceptOwnership`                                     |
+| `owner()` only (no `pendingOwner()`) | `ConfirmedOwner` or plain `Ownable`        | `transferOwnership`                         | Yes for `ConfirmedOwner`; plain `Ownable` transfers immediately |
+| Neither                              | `BurnMintERC20` v1 (plain `AccessControl`) | `grantRole` + `revokeRole` (atomic, 1-step) | No                                                              |
 
 For `tokenPool`, `poolHooks`, and `lockBox`: uses Chainlink's `ConfirmedOwner` (two-step) — always requires `AcceptOwnership`.
 
@@ -822,10 +826,10 @@ RECIPIENT=0xYourAddress \
   --broadcast
 ```
 
-| Env var | Required | Description |
-|---|---|---|
-| `FEE_TOKENS` | Yes | CSV or JSON array of ERC20 token addresses to withdraw |
-| `RECIPIENT` | No | Address to receive the withdrawn fee tokens (defaults to the broadcaster) |
+| Env var      | Required | Description                                                               |
+| ------------ | -------- | ------------------------------------------------------------------------- |
+| `FEE_TOKENS` | Yes      | CSV or JSON array of ERC20 token addresses to withdraw                    |
+| `RECIPIENT`  | No       | Address to receive the withdrawn fee tokens (defaults to the broadcaster) |
 
 The pool token address is printed at runtime for reference so you can identify whether to include it in `FEE_TOKENS`.
 
@@ -854,11 +858,11 @@ ROUTER=0xYourRouterAddress \
   --broadcast
 ```
 
-| Env var | Required | Description |
-|---|---|---|
-| `ROUTER` | No | The CCIP router address to set on the pool (default: current on-chain value) |
-| `RATE_LIMIT_ADMIN` | No | Rate limit admin address (default: current on-chain value, then broadcaster) |
-| `FEE_ADMIN` | No | Fee admin address (default: current on-chain value, then broadcaster). Set to `address(0)` to restrict fee withdrawal to the owner only |
+| Env var            | Required | Description                                                                                                                             |
+| ------------------ | -------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `ROUTER`           | No       | The CCIP router address to set on the pool (default: current on-chain value)                                                            |
+| `RATE_LIMIT_ADMIN` | No       | Rate limit admin address (default: current on-chain value, then broadcaster)                                                            |
+| `FEE_ADMIN`        | No       | Fee admin address (default: current on-chain value, then broadcaster). Set to `address(0)` to restrict fee withdrawal to the owner only |
 
 ### Manage Finality Config
 
@@ -934,17 +938,17 @@ forge script \
 
 When `DEST_CHAIN` is provided, the script logs the current rate limits before applying any changes, and the updated state after. Each direction is shown independently: the **fast finality bucket** is displayed for directions where it is enabled; the **standard finality bucket** (fallback) is displayed for directions where it is not.
 
-| Env var | Required | Description |
-|---|---|---|
-| `BLOCK_DEPTH` | No | Number of block confirmations for fast finality (1–65535). Can be combined with `WAIT_FOR_SAFE` to allow both modes simultaneously. Omit both to reset to default finality. |
-| `WAIT_FOR_SAFE` | No | Set to `true` to use the `safe` head for fast finality. Can be combined with `BLOCK_DEPTH` to allow both modes simultaneously. |
-| `DEST_CHAIN` | No | Remote chain whose lane is queried/updated (e.g. `MANTLE_SEPOLIA`). Required when any rate limit var is set; if omitted, the rate limiter section is skipped entirely |
-| `OUTBOUND_RATE_LIMIT_CAPACITY` | No | uint128, outbound token bucket capacity (fast finality bucket) |
-| `OUTBOUND_RATE_LIMIT_RATE` | No | uint128, outbound token bucket refill rate (tokens/second) |
-| `OUTBOUND_RATE_LIMIT_ENABLED` | No | Override `isEnabled` explicitly (`true`/`false`; defaults to `true` when `CAPACITY` or `RATE` are set) |
-| `INBOUND_RATE_LIMIT_CAPACITY` | No | uint128, inbound token bucket capacity (fast finality bucket) |
-| `INBOUND_RATE_LIMIT_RATE` | No | uint128, inbound token bucket refill rate (tokens/second) |
-| `INBOUND_RATE_LIMIT_ENABLED` | No | Override `isEnabled` explicitly (`true`/`false`; defaults to `true` when `CAPACITY` or `RATE` are set) |
+| Env var                        | Required | Description                                                                                                                                                                 |
+| ------------------------------ | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `BLOCK_DEPTH`                  | No       | Number of block confirmations for fast finality (1–65535). Can be combined with `WAIT_FOR_SAFE` to allow both modes simultaneously. Omit both to reset to default finality. |
+| `WAIT_FOR_SAFE`                | No       | Set to `true` to use the `safe` head for fast finality. Can be combined with `BLOCK_DEPTH` to allow both modes simultaneously.                                              |
+| `DEST_CHAIN`                   | No       | Remote chain whose lane is queried/updated (e.g. `MANTLE_SEPOLIA`). Required when any rate limit var is set; if omitted, the rate limiter section is skipped entirely       |
+| `OUTBOUND_RATE_LIMIT_CAPACITY` | No       | uint128, outbound token bucket capacity (fast finality bucket)                                                                                                              |
+| `OUTBOUND_RATE_LIMIT_RATE`     | No       | uint128, outbound token bucket refill rate (tokens/second)                                                                                                                  |
+| `OUTBOUND_RATE_LIMIT_ENABLED`  | No       | Override `isEnabled` explicitly (`true`/`false`; defaults to `true` when `CAPACITY` or `RATE` are set)                                                                      |
+| `INBOUND_RATE_LIMIT_CAPACITY`  | No       | uint128, inbound token bucket capacity (fast finality bucket)                                                                                                               |
+| `INBOUND_RATE_LIMIT_RATE`      | No       | uint128, inbound token bucket refill rate (tokens/second)                                                                                                                   |
+| `INBOUND_RATE_LIMIT_ENABLED`   | No       | Override `isEnabled` explicitly (`true`/`false`; defaults to `true` when `CAPACITY` or `RATE` are set)                                                                      |
 
 ### Manage LockRelease Liquidity (v1.x pools)
 
@@ -1011,10 +1015,10 @@ AMOUNT=1000000000000000000 \
   --broadcast
 ```
 
-| Env var | Script | Required | Description |
-|---|---|---|---|
-| `REBALANCER` | `SetRebalancer` | Yes | Address to appoint as the pool's rebalancer. |
-| `AMOUNT` | `ProvideLiquidity`, `WithdrawLiquidity` | Yes | Amount of liquidity to add or remove, in the token's smallest unit (wei). |
+| Env var      | Script                                  | Required | Description                                                               |
+| ------------ | --------------------------------------- | -------- | ------------------------------------------------------------------------- |
+| `REBALANCER` | `SetRebalancer`                         | Yes      | Address to appoint as the pool's rebalancer.                              |
+| `AMOUNT`     | `ProvideLiquidity`, `WithdrawLiquidity` | Yes      | Amount of liquidity to add or remove, in the token's smallest unit (wei). |
 
 ### Manage Remote Pools
 
@@ -1087,12 +1091,12 @@ Use this script for enhanced security features like allowlists, CCV management, 
 
 Configure defaults in `script/input/advanced-pool-hooks.json` (see the [Configuration](#configuration) section), or override any field with environment variables:
 
-| Env var | Type | Default (from `advanced-pool-hooks.json`) |
-|---|---|---|
-| `ALLOWLIST` | CSV or JSON array | `.allowlist` |
-| `AUTHORIZED_CALLERS` | CSV or JSON array | `.authorizedCallers` |
-| `THRESHOLD_AMOUNT` | uint256 | `.thresholdAmount` |
-| `POLICY_ENGINE` | address | `.policyEngine` |
+| Env var              | Type              | Default (from `advanced-pool-hooks.json`) |
+| -------------------- | ----------------- | ----------------------------------------- |
+| `ALLOWLIST`          | CSV or JSON array | `.allowlist`                              |
+| `AUTHORIZED_CALLERS` | CSV or JSON array | `.authorizedCallers`                      |
+| `THRESHOLD_AMOUNT`   | uint256           | `.thresholdAmount`                        |
+| `POLICY_ENGINE`      | address           | `.policyEngine`                           |
 
 > **Important:** The `allowlistEnabled` flag is set **immutably** at deploy time based on whether `ALLOWLIST` is non-empty. If you deploy with an empty allowlist (the default), allowlist functionality is permanently disabled — subsequent calls to `UpdateAllowList` will always revert. To enable allowlisting, pass at least one address via `ALLOWLIST` at deploy time.
 
@@ -1108,9 +1112,11 @@ forge script \
 ```
 
 After deployment, the hooks address is automatically saved to:
+
 ```
-script/deployments/advanced-pool-hooks/{CHAIN_NAME_IDENTIFIER}/{timestamp}-AdvancedPoolHooks.json
+history/advanced-pool-hooks/{selectorName}/{timestamp}-AdvancedPoolHooks.json
 ```
+
 The file records the address under the `POOL_HOOKS` key.
 
 Then pass the hooks address as `POOL_HOOKS` when [deploying a new token pool](#step-2-deploy-token-pools-on-both-chains), or connect it to an existing pool via [`UpdateAdvancedPoolHooks`](#connect-advanced-pool-hooks-to-a-token-pool).
@@ -1197,6 +1203,7 @@ POOL_HOOKS=0x... \
 ### Manage Authorized Callers
 
 `AuthorizedCallers` is used in two places:
+
 - **`AdvancedPoolHooks`** — authorized callers are the token pools permitted to invoke the hooks.
 - **`ERC20LockBox`** — authorized callers are the `LockReleaseTokenPool` contracts permitted to call `deposit`/`withdraw`.
 
@@ -1294,7 +1301,7 @@ Optional: Set `FAST_FINALITY=true` to query the fast finality bucket (v2 pools o
 
 Updates rate limiter configuration for a specific lane. Compatible with both v1 and v2 pools. The direction is inferred automatically from whichever `OUTBOUND_*` / `INBOUND_*` vars are set — no need to pass `ENABLED` separately. `isEnabled` defaults to `true` when `CAPACITY` or `RATE` are provided; pass `ENABLED=false` to explicitly disable.
 
-The golden path for v2 lanes is to declare the policy in the local chain config and apply from the declaration: with no rate-limit env vars, a direction resolves from the `lanes{}` entry in `config/chains/<local>.json` — the standard bucket from `capacity`/`rate` (plus the optional `inbound{}` block), the fast finality bucket (`FAST_FINALITY=true`, 2.0.0 pools) from `v2.fastFinality.outbound` / `v2.fastFinality.inbound`. Env vars remain the explicit override for incident response: they win as-is, and when they disagree with (or are missing from) the declaration, the script prints a divergence notice plus a hand-edit hint with the applied values, and `make doctor` WARNs until the declaration is reconciled. Applies never write `lanes{}` back. See [`docs/config-schema.md`](docs/config-schema.md).
+The golden path for v2 lanes is to declare the policy in the local chain config and apply from the declaration: with no rate-limit env vars, a direction resolves from the `lanes{}` entry in `project/<local>.json` — the standard bucket from `capacity`/`rate` (plus the optional `inbound{}` block), the fast finality bucket (`FAST_FINALITY=true`, 2.0.0 pools) from `v2.fastFinality.outbound` / `v2.fastFinality.inbound`. Env vars remain the explicit override for incident response: they win as-is, and when they disagree with (or are missing from) the declaration, the script prints a divergence notice plus a hand-edit hint with the applied values, and `make doctor` WARNs until the declaration is reconciled. Applies never write `lanes{}` back. See [`docs/config-schema.md`](docs/config-schema.md).
 
 ```bash
 # Enable both directions (ENABLED is optional — defaults to true when CAPACITY/RATE are set)
@@ -1346,16 +1353,16 @@ DEST_CHAIN=MANTLE_SEPOLIA \
   --broadcast
 ```
 
-| Env var | Required | Description |
-|---|---|---|
-| `DEST_CHAIN` | Yes | Remote chain whose lane is being updated |
-| `OUTBOUND_RATE_LIMIT_CAPACITY` | To update outbound (unless declared in `lanes{}`) | Token bucket capacity for outbound transfers |
-| `OUTBOUND_RATE_LIMIT_RATE` | To update outbound | Token bucket refill rate (tokens/second) for outbound transfers |
-| `OUTBOUND_RATE_LIMIT_ENABLED` | No | Override `isEnabled` explicitly (`true`/`false`; defaults to `true` when CAPACITY or RATE are set) |
-| `INBOUND_RATE_LIMIT_CAPACITY` | To update inbound (unless declared in `lanes{}`) | Token bucket capacity for inbound transfers |
-| `INBOUND_RATE_LIMIT_RATE` | To update inbound | Token bucket refill rate (tokens/second) for inbound transfers |
-| `INBOUND_RATE_LIMIT_ENABLED` | No | Override `isEnabled` explicitly (`true`/`false`; defaults to `true` when CAPACITY or RATE are set) |
-| `FAST_FINALITY` | No | `true` to update the fast finality bucket instead of the standard finality bucket (v2 only, default: `false`) |
+| Env var                        | Required                                          | Description                                                                                                   |
+| ------------------------------ | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `DEST_CHAIN`                   | Yes                                               | Remote chain whose lane is being updated                                                                      |
+| `OUTBOUND_RATE_LIMIT_CAPACITY` | To update outbound (unless declared in `lanes{}`) | Token bucket capacity for outbound transfers                                                                  |
+| `OUTBOUND_RATE_LIMIT_RATE`     | To update outbound                                | Token bucket refill rate (tokens/second) for outbound transfers                                               |
+| `OUTBOUND_RATE_LIMIT_ENABLED`  | No                                                | Override `isEnabled` explicitly (`true`/`false`; defaults to `true` when CAPACITY or RATE are set)            |
+| `INBOUND_RATE_LIMIT_CAPACITY`  | To update inbound (unless declared in `lanes{}`)  | Token bucket capacity for inbound transfers                                                                   |
+| `INBOUND_RATE_LIMIT_RATE`      | To update inbound                                 | Token bucket refill rate (tokens/second) for inbound transfers                                                |
+| `INBOUND_RATE_LIMIT_ENABLED`   | No                                                | Override `isEnabled` explicitly (`true`/`false`; defaults to `true` when CAPACITY or RATE are set)            |
+| `FAST_FINALITY`                | No                                                | `true` to update the fast finality bucket instead of the standard finality bucket (v2 only, default: `false`) |
 
 ### Manage Token Transfer Fee Config
 
@@ -1375,7 +1382,7 @@ DEST_CHAIN=MANTLE_SEPOLIA \
 
 ##### Set or Update Fee Config
 
-All fee config env vars are optional. Each field resolves independently: an env var wins when set; an unset field takes the declared `lanes.<remote>.v2.feeConfig.<field>` from `config/chains/<local>.json` when the block declares it; otherwise it keeps the current on-chain value. The golden path for v2 lanes is to declare the whole fee config in `v2.feeConfig` and run the script with no fee env vars — the declaration drives the apply. Env vars remain the explicit override for incident response: a value that disagrees with the declaration is applied as-is with a per-field divergence notice plus a hand-edit hint, and `make doctor` WARNs until the declaration is reconciled (applies never write `lanes{}` back). When setting a fee config for the first time with no declaration and no env vars, unset fields default to `0`.
+All fee config env vars are optional. Each field resolves independently: an env var wins when set; an unset field takes the declared `lanes.<remote>.v2.feeConfig.<field>` from `project/<local>.json` when the block declares it; otherwise it keeps the current on-chain value. The golden path for v2 lanes is to declare the whole fee config in `v2.feeConfig` and run the script with no fee env vars — the declaration drives the apply. Env vars remain the explicit override for incident response: a value that disagrees with the declaration is applied as-is with a per-field divergence notice plus a hand-edit hint, and `make doctor` WARNs until the declaration is reconciled (applies never write `lanes{}` back). When setting a fee config for the first time with no declaration and no env vars, unset fields default to `0`.
 
 ```bash
 DEST_CHAIN=MANTLE_SEPOLIA \
@@ -1394,16 +1401,16 @@ DEST_CHAIN=MANTLE_SEPOLIA \
   --broadcast
 ```
 
-| Env var | Required | Description |
-|---|---|---|
-| `DEST_CHAIN` | Yes | Remote chain to configure fees for |
-| `DEST_GAS_OVERHEAD` | No | Gas overhead charged on the destination chain (must be > 0; defaults to the declared `v2.feeConfig` value, then the current on-chain value) |
-| `DEST_BYTES_OVERHEAD` | No | Data availability bytes overhead (defaults to the declared `v2.feeConfig` value, then the current on-chain value) |
-| `FINALITY_FEE_USD_CENTS` | No | Flat fee in 0.01 USD units for finality transfers (defaults to the declared `v2.feeConfig` value, then the current on-chain value) |
-| `FAST_FINALITY_FEE_USD_CENTS` | No | Flat fee in 0.01 USD units for fast finality transfers (defaults to the declared `v2.feeConfig` value, then the current on-chain value) |
-| `FINALITY_TRANSFER_FEE_BPS` | No | Fee in basis points deducted from the transferred amount for finality transfers [0–9999] (defaults to the declared `v2.feeConfig` value, then the current on-chain value) |
-| `FAST_FINALITY_TRANSFER_FEE_BPS` | No | Fee in basis points deducted from the transferred amount for fast finality transfers [0–9999] (defaults to the declared `v2.feeConfig` value, then the current on-chain value) |
-| `DISABLE` | No | Set to `true` to disable the fee config for this lane, reverting the OnRamp to FeeQuoter defaults (default: `false`) |
+| Env var                          | Required | Description                                                                                                                                                                    |
+| -------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `DEST_CHAIN`                     | Yes      | Remote chain to configure fees for                                                                                                                                             |
+| `DEST_GAS_OVERHEAD`              | No       | Gas overhead charged on the destination chain (must be > 0; defaults to the declared `v2.feeConfig` value, then the current on-chain value)                                    |
+| `DEST_BYTES_OVERHEAD`            | No       | Data availability bytes overhead (defaults to the declared `v2.feeConfig` value, then the current on-chain value)                                                              |
+| `FINALITY_FEE_USD_CENTS`         | No       | Flat fee in 0.01 USD units for finality transfers (defaults to the declared `v2.feeConfig` value, then the current on-chain value)                                             |
+| `FAST_FINALITY_FEE_USD_CENTS`    | No       | Flat fee in 0.01 USD units for fast finality transfers (defaults to the declared `v2.feeConfig` value, then the current on-chain value)                                        |
+| `FINALITY_TRANSFER_FEE_BPS`      | No       | Fee in basis points deducted from the transferred amount for finality transfers [0–9999] (defaults to the declared `v2.feeConfig` value, then the current on-chain value)      |
+| `FAST_FINALITY_TRANSFER_FEE_BPS` | No       | Fee in basis points deducted from the transferred amount for fast finality transfers [0–9999] (defaults to the declared `v2.feeConfig` value, then the current on-chain value) |
+| `DISABLE`                        | No       | Set to `true` to disable the fee config for this lane, reverting the OnRamp to FeeQuoter defaults (default: `false`)                                                           |
 
 ##### Disable Fee Config
 
@@ -1438,7 +1445,7 @@ forge script \
 
 ##### Set or Update CCV Config
 
-Each verifier array and the threshold resolve independently through the same ladder as the fee and rate-limit scripts: an env var (a comma-separated address list) wins when set; an unset array takes the declared `lanes.<remote>.v2.ccv.<field>` from `config/chains/<local>.json` when the block declares it; otherwise it keeps the current on-chain value. The golden path for v2 lanes is to declare the CCV set in `v2.ccv` (and the threshold in the chain-level `ccvThreshold`) and run the script with no CCV env vars — the declaration drives the apply. **The read-modify-write is important**: `applyCCVConfigUpdates` replaces a lane's whole entry, so the script reads the current on-chain arrays first and overwrites only the arrays you declare — changing `OUTBOUND_CCVS` never wipes your inbound verifiers. Env vars remain the explicit override for incident response: a value that disagrees with the declaration (compared as a set, order-insensitive) is applied as-is with a divergence notice plus a hand-edit hint (the `v2.ccv` block has no `make add-lane` flag — reconcile it with a reviewed hand edit), and `make doctor` WARNs until reconciled (applies never write `lanes{}` back).
+Each verifier array and the threshold resolve independently through the same ladder as the fee and rate-limit scripts: an env var (a comma-separated address list) wins when set; an unset array takes the declared `lanes.<remote>.v2.ccv.<field>` from `project/<local>.json` when the block declares it; otherwise it keeps the current on-chain value. The golden path for v2 lanes is to declare the CCV set in `v2.ccv` (and the threshold in the chain-level `ccvThreshold`) and run the script with no CCV env vars — the declaration drives the apply. **The read-modify-write is important**: `applyCCVConfigUpdates` replaces a lane's whole entry, so the script reads the current on-chain arrays first and overwrites only the arrays you declare — changing `OUTBOUND_CCVS` never wipes your inbound verifiers. Env vars remain the explicit override for incident response: a value that disagrees with the declaration (compared as a set, order-insensitive) is applied as-is with a divergence notice plus a hand-edit hint (the `v2.ccv` block has no `make add-lane` flag — reconcile it with a reviewed hand edit), and `make doctor` WARNs until reconciled (applies never write `lanes{}` back).
 
 ```bash
 DEST_CHAIN=MANTLE_SEPOLIA \
@@ -1453,14 +1460,14 @@ DEST_CHAIN=MANTLE_SEPOLIA \
   --broadcast
 ```
 
-| Env var | Required | Description |
-|---|---|---|
-| `DEST_CHAIN` | For lane arrays | Remote chain whose CCV set is being configured (omit to set only the pool-global threshold) |
-| `OUTBOUND_CCVS` | No | Comma-separated required verifier addresses for outgoing messages (defaults to the declared `v2.ccv.outboundCCVs`, then the current on-chain value) |
-| `INBOUND_CCVS` | No | Comma-separated required verifier addresses for incoming messages (defaults to the declared value, then on-chain) |
-| `THRESHOLD_OUTBOUND_CCVS` | No | Additional outbound verifiers required at or above the threshold amount; requires a non-empty outbound base set |
-| `THRESHOLD_INBOUND_CCVS` | No | Additional inbound verifiers required at or above the threshold amount; requires a non-empty inbound base set |
-| `CCV_THRESHOLD_AMOUNT` | No | Pool-global transfer amount at or above which the threshold verifier sets apply (defaults to the declared chain-level `ccvThreshold`, then the current on-chain value; `0` = no threshold) |
+| Env var                   | Required        | Description                                                                                                                                                                                |
+| ------------------------- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `DEST_CHAIN`              | For lane arrays | Remote chain whose CCV set is being configured (omit to set only the pool-global threshold)                                                                                                |
+| `OUTBOUND_CCVS`           | No              | Comma-separated required verifier addresses for outgoing messages (defaults to the declared `v2.ccv.outboundCCVs`, then the current on-chain value)                                        |
+| `INBOUND_CCVS`            | No              | Comma-separated required verifier addresses for incoming messages (defaults to the declared value, then on-chain)                                                                          |
+| `THRESHOLD_OUTBOUND_CCVS` | No              | Additional outbound verifiers required at or above the threshold amount; requires a non-empty outbound base set                                                                            |
+| `THRESHOLD_INBOUND_CCVS`  | No              | Additional inbound verifiers required at or above the threshold amount; requires a non-empty inbound base set                                                                              |
+| `CCV_THRESHOLD_AMOUNT`    | No              | Pool-global transfer amount at or above which the threshold verifier sets apply (defaults to the declared chain-level `ccvThreshold`, then the current on-chain value; `0` = no threshold) |
 
 ## Supported Networks
 
@@ -1477,18 +1484,19 @@ DEST_CHAIN=MANTLE_SEPOLIA \
 
 ## Configuration
 
-The repo keeps its cross-chain state as **data, not code**, in two git-visible stores:
+The repo keeps its cross-chain state as **data, not code**, in two files per chain (both keyed by the canonical CCIP **selectorName**, e.g. `ethereum-testnet-sepolia`):
 
-- **`config/chains/<selectorName>.json`** — one reviewed file per chain: the API-synced `ccip{}` address block + API-synced identity/metadata (`displayName`, `chainFamily`, `environment`, `explorerUrl`, `nativeCurrencySymbol`), the owner-written `lanes{}` policy subtree (which remotes this pool connects to, at what outbound rate limits — one entry per remote, keyed by the remote's selectorName, carrying its `remoteSelector` + `capacity`/`rate`), and the hand-authored keys (`chainNameIdentifier`, `rpcEnv`, `confirmations`, `ccipBnM`). Files are named by the canonical CCIP **selectorName** (e.g. `ethereum-testnet-sepolia.json`). `HelperConfig` reads them through `src/config/ChainConfig.sol` and discovers the chain list by scanning the directory, so adding a chain — or updating a CCIP address — is a **reviewed config edit with zero Solidity changes**.
-- **`addresses/<chainId>.json`** — the deployed-address registry (schema v2: `active` role pointers + versioned `deployments`), written automatically on a real broadcast via a single `DeploymentRecorder` call per artifact (user-specific, **gitignored**, local to the deploy machine; see `addresses/11155111.example.json`).
+- **`config/chains/<selectorName>.json`** — pure API/chain facts: the API-synced `ccip{}` address block + API-synced identity/metadata (`displayName`, `chainFamily`, `environment`, `explorerUrl`, `nativeCurrencySymbol`), three hand-authored keys the API serves nothing for (`chainNameIdentifier`, `rpcEnv`, `confirmations`), and the join keys. **Always git-tracked.** `HelperConfig` reads it through `src/config/ChainConfig.sol` and discovers the chain list by scanning the `config/chains` directory, so adding a chain — or updating a CCIP address — is a **reviewed config edit with zero Solidity changes**.
+- **`project/<selectorName>.json`** — the **project store**: three subtrees, one writer each, plus `"schema": 3`. `addresses{}` is the deployed-address registry (`active` role pointers + versioned `deployments`), written on a broadcast by the deploy recorder and by `make adopt-token`; `lanes{}` is owner policy (which remotes this pool connects to, at what outbound rate limits), written by `make add-lane`; `roles{}` is authority, written by `make snapshot-chain`. **Gitignored in this template** (it holds throwaway test addresses; only `project/ethereum-testnet-sepolia.example.json` ships) — a downstream **fork un-gitignores it** to track its own lanes/roles/addresses.
 
-**One writer per field:** the CCIP REST API owns **every field it serves** in the **git-tracked** `config/chains/*.json` (via the sync) — the `ccip{}` addresses AND the identity/metadata fields (`displayName`, `chainFamily`, `environment`, `explorerUrl`, `nativeCurrencySymbol`); the `lanes{}` subtree is **owner policy**, written only by `make add-lane` (or a reviewed hand edit) and **never by the API sync** — which remotes to connect and at what rate limits is a decision, not an API fact; only the keys the API serves nothing for (`chainNameIdentifier`, `rpcEnv`, `confirmations`, `ccipBnM`) are hand-authored in reviewed PRs, and the join keys are guard-validated — so for that file **a git diff is an unambiguous audit log**. The deployed-address registry `addresses/` is a **separate, gitignored** store (not a git audit trail); its integrity comes from a single writer — the `DeploymentRecorder` that emits the `script/deployments/**` ledger and the registry entry in one call. Environment variables remain available as **overrides** on top of both.
+**One writer per subtree, and two audit surfaces.** In `config/chains`, the CCIP REST API owns every field it serves (via the sync); the three hand keys are hand-authored in reviewed PRs; the join keys are guard-validated — and because the file is always git-tracked, a git diff is an unambiguous audit log. In the project store, each subtree has one writer (`RegistryWriter` for `addresses{}`, `make add-lane` for `lanes{}`, `make snapshot-chain` for `roles{}`), each writing only its own subtree so no writer clobbers another. So the audit surface is `config/chains` in the template, and `config/chains` **plus** a tracked `project/` in a fork. The deploy `history/` ledger stays gitignored in both. Environment variables remain **read-only overrides** on top of the registry: an env-driven run resolves the override but never writes the store.
 
-> **Reference docs:** **[`docs/config-schema.md`](docs/config-schema.md)** is the per-field reference (every key in a chain config — identity, the `ccip{}` block, extras, and the non-EVM shape — with its type, writer, and whether it is API-synced, hand-authored, or deploy-written); **[`docs/config-architecture.md`](docs/config-architecture.md)** is the `make`-command reference plus the layered architecture (brand-colored Mermaid diagrams: layering, sync data-flow, the one-writer store model, and the selectorName join). The operational how-to (discover → add-chain → sync → doctor) stays below.
+> **Reference docs:** **[`docs/config-schema.md`](docs/config-schema.md)** is the per-field reference for both files (config/chains facts + the project store's `addresses{}`/`lanes{}`/`roles{}` subtrees + the non-EVM shape); **[`docs/config-architecture.md`](docs/config-architecture.md)** is the `make`-command reference plus the layered architecture (brand-colored Mermaid diagrams: layering, sync data-flow, the two-file store model, and the selectorName join); **[`docs/deployed-addresses.md`](docs/deployed-addresses.md)** is the deployed-address loop and the template-vs-fork tracking rule. The operational how-to (discover → add-chain → sync → doctor) stays below.
 
 ### Token Deployment Configuration
 
 Default token parameters are in `script/input/token.json`. Deployment fields can be overridden with env vars (see [Step 1](#step-1-deploy-token-on-both-chains)). `tokenAmountToMint` and `tokenAmountToTransfer` are used as defaults by the [Token Operations](#token-operations) scripts:
+
 ```json
 {
   "name": "BnM Test",
@@ -1504,6 +1512,7 @@ Default token parameters are in `script/input/token.json`. Deployment fields can
 ### Advanced Pool Hooks Configuration
 
 Default hooks parameters are in `script/input/advanced-pool-hooks.json`. All fields can be overridden with env vars (see [Deploy Advanced Pool Hooks](#deploy-advanced-pool-hooks)):
+
 ```json
 {
   "allowlist": [],
@@ -1521,7 +1530,7 @@ Tooling under `script/config/` keeps the config files true to the live [CCIP API
 make discover [FILTER=<term>]                        # list the API catalog vs your local configs
 make add-chain CHAIN=<selectorName> SELECTOR=<sel>   # generate config/chains/<selectorName>.json from the API
 make add-lane LOCAL=<a> REMOTE=<b> CAPACITY=<wei> RATE=<wei> [INBOUND_CAPACITY=<wei> INBOUND_RATE=<wei>] [BOTH=1]  # declare a lanes{} policy entry (inbound pair adds the inbound block; BOTH=1 adds the reciprocal)
-make adopt-token CHAIN=<name> TOKEN=<addr> [TOKEN_POOL=<addr>]        # adopt externally deployed contracts into the address registry
+make adopt-token CHAIN=<name> TOKEN=<addr> [TOKEN_POOL=<addr>]        # adopt externally deployed contracts into the project store (non-EVM: TOKEN_B58= [POOL_B58=])
 make sync-preview CHAIN=<name>                        # fetch + log a chain's ccip{}, no write
 make sync CHAIN=<name> / make sync-all               # rewrite API-served fields (ccip{} + identity/metadata) from the API
 make sync-check [CHAIN=<name>]                        # read-only drift check (CI: bash script/config/sync-check.sh for 0/1/2)
@@ -1531,9 +1540,9 @@ make doctor CHAIN=<name>                              # layered [PASS]/[FAIL]/[W
 make fmt-config                                       # restore the canonical config format after a raw forge run
 ```
 
-`CHAIN=` is the canonical **selectorName** (the file basename). The sync writes **every API-served field** — the `ccip{}` subtree plus the identity/metadata fields (`displayName`, `chainFamily`, `environment`, `explorerUrl`, `nativeCurrencySymbol`) — leaving every hand-authored key (`chainNameIdentifier`, `rpcEnv`, `confirmations`, `ccipBnM`) and the `lanes{}` policy subtree untouched, and re-canonicalizes as `jq --indent 2 -S`, so a no-drift `make sync` is a **zero-diff** no-op. Every fetch is guarded: the API chainId must equal the config's (`SELECTOR MISMATCH`) and the config `name` must equal the API selectorName (`SELECTOR NAME MISMATCH`); non-EVM chains (e.g. `solana-devnet`) skip the EVM address sync cleanly but still refresh their served identity/metadata. A scheduled workflow (`.github/workflows/config-drift.yml`) runs the drift check weekly: drift fails visibly, an unreachable API only warns.
+`CHAIN=` is the canonical **selectorName** (the file basename). The sync writes **every API-served field** — the `ccip{}` subtree plus the identity/metadata fields (`displayName`, `chainFamily`, `environment`, `explorerUrl`, `nativeCurrencySymbol`) — leaving the three hand-authored keys (`chainNameIdentifier`, `rpcEnv`, `confirmations`) untouched, never touching the project store, and re-canonicalizes as `jq --indent 2 -S` (trailing newline), so a no-drift `make sync` is a **zero-diff** no-op. Every fetch is guarded: the API chainId must equal the config's (`SELECTOR MISMATCH`) and the config `name` must equal the API selectorName (`SELECTOR NAME MISMATCH`); non-EVM chains (e.g. `solana-devnet`) skip the EVM address sync cleanly but still refresh their served identity/metadata. A scheduled workflow (`.github/workflows/config-drift.yml`) runs the drift check weekly: drift fails visibly, an unreachable API only warns.
 
-`make adopt-token` brings externally deployed contracts into the deployed-address registry, and it is guarded too: everything is validated on-chain before anything is written (the token's registration path is probed, and a given pool must report a cataloged contract version per [`docs/pool-versions.md`](docs/pool-versions.md) and manage exactly that token); see [`docs/enabling-existing-token.md`](docs/enabling-existing-token.md).
+`make adopt-token` brings externally deployed contracts into the project store's `addresses{}` subtree, and it is guarded too: everything is validated on-chain before anything is written (the token's registration path is probed, and a given pool must report a cataloged contract version per [`docs/pool-versions.md`](docs/pool-versions.md) and manage exactly that token). A non-EVM chain uses the base58 path, `make adopt-token CHAIN=<solana-chain> TOKEN_B58=<base58> [POOL_B58=<base58>]`, which feeds `applyChainUpdates` from the store instead of the old env-only path; see [`docs/enabling-existing-token.md`](docs/enabling-existing-token.md).
 
 `make add-lane` is the mirror-image writer for the `lanes{}` subtree: it writes **only** `.lanes` (same preserve-and-replace pattern the sync uses for `.ccip`), copying the remote's `chainSelector` into the entry as `remoteSelector`. It is guarded too: a **duplicate** lane is a logged no-op that leaves the file byte-identical, a **self-lane** (same chain, or two config files sharing one selector) is refused, and a lane to a remote whose **pool is not deployed yet** logs a WARN naming the missing deploy. `make doctor` proves the mesh on top: every lane must resolve to an existing config file with a matching selector, and a **one-sided lane FAILs, naming both chains** (add the reciprocal with `BOTH=1`); lanes to non-EVM chains are exempt from reciprocity (destination-only). With an RPC configured, the doctor's final **lanes rung** reconciles the declared policy against the on-chain pool itself, both directions (declared-but-not-applied, rate-limit drift including declared `inbound{}`/`v2{}` blocks, and on-chain-but-not-declared lanes are WARNs; see `docs/config-architecture.md`).
 
@@ -1543,11 +1552,11 @@ The tooling is tested twice over: `forge test` pins the API->config transform ag
 
 ### Authority durable store — the `roles{}` subtree
 
-Where `ccip{}` is API fact and `lanes{}` is owner policy, **`roles{}` is declared authority**: who
-holds every privileged role across the token, its pool, the TokenAdminRegistry, and (when present) the
-lockbox and hooks. It is the git-versioned record of *who controls this deployment*, and it is
-reconciled against the live chain — the same declare-once-then-reconcile model as `lanes{}`, with the
-same one-writer discipline. Full field reference: [`docs/config-schema.md`](docs/config-schema.md#the-roles-subtree---declared-authority-not-api-fact); the operational runbook (mental model, drift decision tree, honest-coverage caveat): [`docs/roles.md`](docs/roles.md).
+Where `ccip{}` is API fact, **`lanes{}` and `roles{}` are the project store's owner-written subtrees**:
+`roles{}` is declared authority — who holds every privileged role across the token, its pool, the
+TokenAdminRegistry, and (when present) the lockbox and hooks. It is the durable record of _who controls
+this deployment_ (git-versioned once a fork tracks `project/`), reconciled against the live chain — the
+same declare-once-then-reconcile model as `lanes{}`, with the same one-writer discipline. Full field reference: [`docs/config-schema.md`](docs/config-schema.md#the-roles-subtree---declared-authority-not-api-fact); the operational runbook (mental model, drift decision tree, honest-coverage caveat): [`docs/roles.md`](docs/roles.md).
 
 ```bash
 make snapshot-chain CHAIN=<name>   # ONLY writer: backfill roles{} FROM chain (opt: TOKEN= TOKEN_POOL= TAR= SCAN_FROM_BLOCK=)
@@ -1569,80 +1578,83 @@ does **not** prove its mint/burn rights are safe (see the honest-coverage caveat
 The `VerifyRoles` reader (`script/governance/VerifyRoles.s.sol`) prints the current holder of every
 slot for an at-a-glance audit.
 
-### Deployed-address registry — `addresses/<chainId>.json` (the default)
+### Project store — `project/<selectorName>.json` (the default)
 
-After a `--broadcast` deploy, every later script resolves the deployed addresses from the registry automatically — no `export` step. This now holds for **all four artifacts**: `token`, `tokenPool`, `lockBox`, **and** `poolHooks` (the last two previously had to be re-exported by hand). Resolution precedence (highest first), per role:
+After a `--broadcast` deploy, every later script resolves the deployed addresses from the registry (the `addresses{}` subtree of the project store) automatically — no `export` step. This holds for **all four artifacts**: `token`, `tokenPool`, `lockBox`, **and** `poolHooks`. Resolution precedence (highest first), per role:
 
 1. Inline alias — `TOKEN=0x...` / `TOKEN_POOL=0x...` / `LOCK_BOX=0x...` / `POOL_HOOKS=0x...` on the command line
 2. Chain-scoped session export — `ETHEREUM_SEPOLIA_TOKEN`, `MANTLE_SEPOLIA_TOKEN_POOL`, `ETHEREUM_SEPOLIA_LOCK_BOX`, ...
-3. **Address registry** — `addresses/<chainId>.json` → `active.<role>` (the default path)
+3. **Registry** — `project/<selectorName>.json` → `addresses.active.<role>` (the default path)
 
-The registry is a **schema-v2** file with two sub-stores: `active` (the single per-role pointer `HelperConfig` resolves) and `deployments` (uniquely-named entries whose key carries the pool's type and version — e.g. `BnM-T_BurnMintTokenPool_2.0.0` — so distinct artifacts never collide in storage). One writer owns it: each deploy script makes a single `DeploymentRecorder` call that emits the `script/deployments/**` ledger **and** updates the registry, so the two never drift. `active.<role>` is single-valued: deploy two pools for the same symbol on one chain and the zero-export getters resolve the last one for both tokens (pass the other explicitly). See [config-schema.md](docs/config-schema.md#the-deployed-address-registry---addresseschainidjson-schema-v2) and [deployed-addresses.md](docs/deployed-addresses.md) for the keying table and the two-store model.
+The registry has two sub-stores: `active` (the single per-role pointer `HelperConfig` resolves) and `deployments` (uniquely-named entries whose key carries the pool's type and version — e.g. `BnM-T_BurnMintTokenPool_2.0.0` — so distinct artifacts never collide in storage). Values are strings: EVM hex, or base58 on a non-EVM chain. One writer owns it: each deploy script makes a single `DeploymentRecorder` call that emits the `history/` ledger **and** updates the registry (`writeJson` on `.addresses` only, leaving `lanes{}`/`roles{}` byte-identical), so the two never drift. `active.<role>` is single-valued: deploy two pools for the same symbol on one chain and the zero-export getters resolve the last one for both tokens (pass the other explicitly). See [config-schema.md](docs/config-schema.md#the-addresses-sub-store-the-registry) and [deployed-addresses.md](docs/deployed-addresses.md) for the keying table and the full loop.
 
-The registry also guards against accidental redeploys: while it holds a live address under a `deployments` name, the corresponding deploy script refuses to run and prints the registered address. Set `FORCE_REDEPLOY=true` to deploy a replacement of the *same* name (the old address stays in the append-only `script/deployments/` ledger; the registry itself is gitignored, so it is not in git history). Note `active.tokenPool` is *what this repo last deployed*, not proof of what CCIP routes through — the on-chain TokenAdminRegistry is the authority, and `make doctor` WARNs when they diverge.
+The registry also guards against accidental redeploys: while it holds a live address under a `deployments` name, the corresponding deploy script refuses to run and prints the registered address. Set `FORCE_REDEPLOY=true` to deploy a replacement of the _same_ name (the old address stays in the append-only `history/` ledger; in the template the project store is gitignored, so the drop is not in git history — a fork that tracks `project/` sees it in the diff). Note `active.tokenPool` is _what this repo last deployed_, not proof of what CCIP routes through — the on-chain TokenAdminRegistry is the authority, and `make doctor` WARNs when they diverge.
 
 ### Sharing addresses with your team
 
-Both deployed-address stores are gitignored in this template. When you **fork it into your own project**, you
-MAY un-gitignore them to share addresses with colleagues and CI. The two stores warrant different advice — see
-[deployed-addresses.md](docs/deployed-addresses.md) for the full two-store model.
+`project/` and `history/` are gitignored in this template. When you **fork it into your own project**, you
+SHOULD un-gitignore `project/` to share lanes, roles, and addresses with colleagues and CI — public data
+only, never secrets. `history/` is optional. See [deployed-addresses.md](docs/deployed-addresses.md) for the
+full model.
 
-- **Registry (`addresses/<chainId>.json`) — recommended for teams.** It holds public addresses only, no
-  secrets. Track it and every colleague plus CI resolves the same addresses on clone, with zero `export`.
-- **History (`script/deployments/`) — optional.** Be honest about what it is: it is **write-only** (nothing in
-  this repo reads it), and it grows one file per deploy forever. Foundry's own `broadcast/` directory already
-  records every deploy with richer detail (and is itself gitignored, `.gitignore:8`). Track `script/deployments/`
-  only if you specifically want an in-repo, human-readable deploy log.
+- **Project store (`project/<selectorName>.json`) — recommended for teams.** It holds public addresses,
+  reviewed lane policy, and reviewed authority — no secrets. Track it and every colleague plus CI resolves
+  the same state on clone (zero `export`), and a git diff becomes an audit log for lanes/roles/addresses
+  alongside `config/chains`.
+- **History (`history/`) — optional.** Be honest about what it is: it is **write-only** (nothing in this
+  repo reads it), and it grows one file per deploy forever. Foundry's own `broadcast/` directory already
+  records every deploy with richer detail (and is itself gitignored, `.gitignore:8`). Track `history/` only
+  if you specifically want an in-repo, human-readable deploy log.
 
-**Guardrails (mandatory if you track the registry):**
+**Guardrails (mandatory if you track the project store):**
 
-1. **Never commit local/anvil chains.** Keep an explicit ignore for `addresses/31337.json` (and any other
-   local chain id).
-2. **The test suite writes real `addresses/<chainId>.json` files for scratch chain ids** (e.g. `16602`, and
-   the `9000000xx` throwaways). Today `.gitignore` hides them. If you un-ignore the registry, add explicit
-   ignores for those scratch ids, or a stray test artifact gets committed. This is real: a leftover scratch
-   registry file once bricked the local test suite while `git status` stayed clean.
+1. **Never commit local/anvil or scratch chains.** The template already ignores `project/local-*.json` and
+   `project/zz-scratch-*.json`; keep those patterns. The test suite writes real `project/zz-scratch-*.json`
+   files, so a missing ignore commits a stray test artifact. This is real: a leftover scratch file once
+   bricked the local test suite while `git status` stayed clean.
+2. **Never commit secrets.** The store is public data only (addresses + reviewed policy/authority). A
+   secret-shaped value (URL / hex private key) in any `project/` file FAILs a lint.
 3. **`active` is not authority.** It records what this repo deployed most recently, not what is wired. The
    on-chain **TokenAdminRegistry** is the source of truth. Run `make doctor CHAIN=<name>` (in CI too) — it
    reconciles the registry pool against the wired pool and WARNs on divergence.
-4. **Review registry diffs like config changes.** Put `addresses/` under CODEOWNERS, and gate mainnet
-   chain-id files behind stricter approval.
+4. **Review project-store diffs like config changes.** Put `project/` under CODEOWNERS, and gate mainnet
+   files behind stricter approval.
 5. **Do this in a single-deployment project**, not a shared template clone where many developers push
    disposable fixtures.
 
-Do **not** claim git gives an audit trail for the registry (it is gitignored), and do not tell people to trust
-the file over the on-chain TokenAdminRegistry.
+The audit surface is `config/chains` (always tracked) plus a fork's tracked `project/`; do not tell people
+to trust the store over the on-chain TokenAdminRegistry.
 
 ### Session exports — `export VAR=0x...` (overrides)
 
-These are **not** stored in `.env` and are now **optional**: the registry covers the default flow. Use an export (or the chain-agnostic `TOKEN` / `TOKEN_POOL` inline aliases, see [CLI inline vars](#cli-inline-vars----varvalue-forge-script-)) when you want to target a *different* contract than the registered one — e.g. an older deployment or a contract deployed outside this repo. Session exports last for the current terminal — values can always be recovered from `addresses/<chainId>.json` or `script/deployments/`.
+These are **not** stored in `.env` and are now **optional**: the registry covers the default flow. Use an export (or the chain-agnostic `TOKEN` / `TOKEN_POOL` inline aliases, see [CLI inline vars](#cli-inline-vars----varvalue-forge-script-)) when you want to target a _different_ contract than the registered one — e.g. an older deployment or a contract deployed outside this repo. Session exports last for the current terminal — values can always be recovered from `project/<selectorName>.json` or the `history/` ledger.
 
 > **Note:** Do not add these to `.env`. An env var always **beats** the registry, so a stale `.env` value would silently target the wrong contract after a redeployment.
 
 **Token addresses** — override after [Step 1: Deploy Token](#step-1-deploy-token-on-both-chains):
 
-| Variable | Chain |
-|---|---|
+| Variable                 | Chain            |
+| ------------------------ | ---------------- |
 | `ETHEREUM_SEPOLIA_TOKEN` | Ethereum Sepolia |
-| `MANTLE_SEPOLIA_TOKEN` | Mantle Sepolia |
+| `MANTLE_SEPOLIA_TOKEN`   | Mantle Sepolia   |
 
 **Non-EVM destination token addresses** — set before running [Step 5: Apply Chain Updates](#step-5-apply-chain-updates-configure-cross-chain-routes) when targeting a non-EVM chain. These are base58-encoded addresses, not `0x`-prefixed:
 
-| Variable | Chain |
-|---|---|
+| Variable              | Chain         |
+| --------------------- | ------------- |
 | `SOLANA_DEVNET_TOKEN` | Solana Devnet |
 
 **Token pool addresses** — override after [Step 2: Deploy Token Pools](#step-2-deploy-token-pools-on-both-chains):
 
-| Variable | Chain |
-|---|---|
+| Variable                      | Chain            |
+| ----------------------------- | ---------------- |
 | `ETHEREUM_SEPOLIA_TOKEN_POOL` | Ethereum Sepolia |
-| `MANTLE_SEPOLIA_TOKEN_POOL` | Mantle Sepolia |
+| `MANTLE_SEPOLIA_TOKEN_POOL`   | Mantle Sepolia   |
 
 **Non-EVM destination token pool addresses** — set before running [Step 5: Apply Chain Updates](#step-5-apply-chain-updates-configure-cross-chain-routes) when targeting a non-EVM chain. These are base58-encoded addresses, not `0x`-prefixed:
 
-| Variable | Chain |
-|---|---|
+| Variable                   | Chain         |
+| -------------------------- | ------------- |
 | `SOLANA_DEVNET_TOKEN_POOL` | Solana Devnet |
 
 ### CLI inline vars — `VAR=value forge script ...`
@@ -1651,39 +1663,39 @@ Prepended directly to a single `forge script` command. They apply to that one in
 
 > **Note:** Do not add these to `.env`. The same stale-value problem applies: scripts check for zero/empty values to trigger fallback behavior, and a value sourced from `.env` would silently suppress that.
 
-| Variable | Documented in | Config file default |
-|---|---|---|
-| `TOKEN_NAME`, `TOKEN_SYMBOL`, `TOKEN_DECIMALS`, `TOKEN_MAX_SUPPLY`, `TOKEN_PRE_MINT`, `TOKEN_PRE_MINT_RECIPIENT`, `CCIP_ADMIN_ADDRESS` | [Step 1: Deploy Token](#step-1-deploy-token-on-both-chains) | `script/input/token.json` |
-| `ROLES_RECIPIENT` | [Step 1: Deploy Token](#step-1-deploy-token-on-both-chains) | |
-| `TOKEN` | Chain-agnostic inline alias for `{CHAIN}_TOKEN`. Accepted by all scripts that resolve a deployed token address. Takes priority over the session export. | |
-| `TOKEN_POOL` | Chain-agnostic inline alias for `{CHAIN}_TOKEN_POOL`. Accepted by all scripts that resolve a deployed pool address. Takes priority over the session export. | |
-| `DEST_TOKEN_POOL` | Destination-chain pool alias used by `ApplyChainUpdates`. Takes priority over `{DEST_CHAIN}_TOKEN_POOL`. | |
-| `DEST_TOKEN` | Destination-chain token alias used by `ApplyChainUpdates`. Takes priority over `{DEST_CHAIN}_TOKEN`. | |
-| `POOL_HOOKS` | [Burn & Mint Pool](#burn--mint-pool), [Lock & Release Pool](#lock--release-pool), [Manage Allowlist](#manage-allowlist), [Manage Authorized Callers](#manage-authorized-callers) | |
-| `LOCK_BOX` | [Lock & Release Pool](#lock--release-pool), [Deposit to LockBox](#deposit-to-lockbox), [Withdraw from LockBox](#withdraw-from-lockbox), [Manage Authorized Callers](#manage-authorized-callers) | |
-| `DECIMALS` | [Burn & Mint Pool](#burn--mint-pool), [Lock & Release Pool](#lock--release-pool) | |
-| `AUTHORIZED_CALLERS` | [Lock & Release Pool](#lock--release-pool), [Deploy Advanced Pool Hooks](#deploy-advanced-pool-hooks) | `script/input/advanced-pool-hooks.json` (deploy only) |
-| `CCIP_ADMIN_ADDRESS` | [Step 3: Claim Admin](#step-3-claim-admin-on-both-chains) | |
-| `DEST_CHAIN` | [Step 5: Apply Chain Updates](#step-5-apply-chain-updates-configure-cross-chain-routes), [Manage Remote Pools](#manage-remote-pools), [Manage Rate Limiters](#manage-rate-limiters), [Manage Finality Config](#manage-finality-config), [Manage Token Transfer Fee Config](#manage-token-transfer-fee-config) | |
-| `OUTBOUND_RATE_LIMIT_CAPACITY`, `OUTBOUND_RATE_LIMIT_RATE`, `OUTBOUND_RATE_LIMIT_ENABLED` | [Step 5: Apply Chain Updates](#step-5-apply-chain-updates-configure-cross-chain-routes), [Manage Rate Limiters](#manage-rate-limiters), [Manage Finality Config](#manage-finality-config) | |
-| `INBOUND_RATE_LIMIT_CAPACITY`, `INBOUND_RATE_LIMIT_RATE`, `INBOUND_RATE_LIMIT_ENABLED` | [Step 5: Apply Chain Updates](#step-5-apply-chain-updates-configure-cross-chain-routes), [Manage Rate Limiters](#manage-rate-limiters), [Manage Finality Config](#manage-finality-config) | |
-| `FAST_FINALITY` | [Manage Rate Limiters](#manage-rate-limiters), [Manage Finality Config](#manage-finality-config) | |
-| `AMOUNT` | [Mint Tokens](#mint-tokens), [Deposit to LockBox](#deposit-to-lockbox), [Withdraw from LockBox](#withdraw-from-lockbox) | `script/input/token.json` |
-| `MINT_RECEIVER` | [Mint Tokens](#mint-tokens) | |
-| `RECIPIENT` | [Withdraw from LockBox](#withdraw-from-lockbox), [Withdraw Fee Tokens](#withdraw-fee-tokens) | |
-| `FEE_TOKENS` | [Get Fee Token Balances](#get-fee-token-balances), [Withdraw Fee Tokens](#withdraw-fee-tokens) | |
-| `ROUTER`, `RATE_LIMIT_ADMIN`, `FEE_ADMIN` | [Manage Dynamic Config](#manage-dynamic-config) | |
-| `BLOCK_DEPTH`, `WAIT_FOR_SAFE` | [Manage Finality Config](#manage-finality-config) | |
-| `REMOTE_POOL_ADDRESS` | [Manage Remote Pools](#manage-remote-pools) | |
-| `ALLOWLIST`, `THRESHOLD_AMOUNT`, `POLICY_ENGINE` | [Deploy Advanced Pool Hooks](#deploy-advanced-pool-hooks) | `script/input/advanced-pool-hooks.json` |
-| `NEW_HOOK` | [Connect Advanced Pool Hooks to a Token Pool](#connect-advanced-pool-hooks-to-a-token-pool) | |
-| `ENTITY_TYPE` | [Transfer Ownership](#transfer-ownership) | |
-| `ADDRESS` | [Transfer Ownership](#transfer-ownership) | |
-| `NEW_OWNER` | [Transfer Ownership](#transfer-ownership) | |
-| `NEW_ADMIN` | [Transfer Token Admin Role](#transfer-token-admin-role) | |
-| `ADD_ADDRESSES`, `REMOVE_ADDRESSES` | [Manage Allowlist](#manage-allowlist), [Manage Authorized Callers](#manage-authorized-callers) | |
-| `CHECK_ADDRESS` | [Manage Allowlist](#manage-allowlist) | |
-| `DEST_GAS_OVERHEAD`, `DEST_BYTES_OVERHEAD`, `FINALITY_FEE_USD_CENTS`, `FAST_FINALITY_FEE_USD_CENTS`, `FINALITY_TRANSFER_FEE_BPS`, `FAST_FINALITY_TRANSFER_FEE_BPS`, `DISABLE` | [Manage Token Transfer Fee Config](#manage-token-transfer-fee-config) | |
+| Variable                                                                                                                                                                      | Documented in                                                                                                                                                                                                                                                                                                 | Config file default                                   |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
+| `TOKEN_NAME`, `TOKEN_SYMBOL`, `TOKEN_DECIMALS`, `TOKEN_MAX_SUPPLY`, `TOKEN_PRE_MINT`, `TOKEN_PRE_MINT_RECIPIENT`, `CCIP_ADMIN_ADDRESS`                                        | [Step 1: Deploy Token](#step-1-deploy-token-on-both-chains)                                                                                                                                                                                                                                                   | `script/input/token.json`                             |
+| `ROLES_RECIPIENT`                                                                                                                                                             | [Step 1: Deploy Token](#step-1-deploy-token-on-both-chains)                                                                                                                                                                                                                                                   |                                                       |
+| `TOKEN`                                                                                                                                                                       | Chain-agnostic inline alias for `{CHAIN}_TOKEN`. Accepted by all scripts that resolve a deployed token address. Takes priority over the session export.                                                                                                                                                       |                                                       |
+| `TOKEN_POOL`                                                                                                                                                                  | Chain-agnostic inline alias for `{CHAIN}_TOKEN_POOL`. Accepted by all scripts that resolve a deployed pool address. Takes priority over the session export.                                                                                                                                                   |                                                       |
+| `DEST_TOKEN_POOL`                                                                                                                                                             | Destination-chain pool alias used by `ApplyChainUpdates`. Takes priority over `{DEST_CHAIN}_TOKEN_POOL`.                                                                                                                                                                                                      |                                                       |
+| `DEST_TOKEN`                                                                                                                                                                  | Destination-chain token alias used by `ApplyChainUpdates`. Takes priority over `{DEST_CHAIN}_TOKEN`.                                                                                                                                                                                                          |                                                       |
+| `POOL_HOOKS`                                                                                                                                                                  | [Burn & Mint Pool](#burn--mint-pool), [Lock & Release Pool](#lock--release-pool), [Manage Allowlist](#manage-allowlist), [Manage Authorized Callers](#manage-authorized-callers)                                                                                                                              |                                                       |
+| `LOCK_BOX`                                                                                                                                                                    | [Lock & Release Pool](#lock--release-pool), [Deposit to LockBox](#deposit-to-lockbox), [Withdraw from LockBox](#withdraw-from-lockbox), [Manage Authorized Callers](#manage-authorized-callers)                                                                                                               |                                                       |
+| `DECIMALS`                                                                                                                                                                    | [Burn & Mint Pool](#burn--mint-pool), [Lock & Release Pool](#lock--release-pool)                                                                                                                                                                                                                              |                                                       |
+| `AUTHORIZED_CALLERS`                                                                                                                                                          | [Lock & Release Pool](#lock--release-pool), [Deploy Advanced Pool Hooks](#deploy-advanced-pool-hooks)                                                                                                                                                                                                         | `script/input/advanced-pool-hooks.json` (deploy only) |
+| `CCIP_ADMIN_ADDRESS`                                                                                                                                                          | [Step 3: Claim Admin](#step-3-claim-admin-on-both-chains)                                                                                                                                                                                                                                                     |                                                       |
+| `DEST_CHAIN`                                                                                                                                                                  | [Step 5: Apply Chain Updates](#step-5-apply-chain-updates-configure-cross-chain-routes), [Manage Remote Pools](#manage-remote-pools), [Manage Rate Limiters](#manage-rate-limiters), [Manage Finality Config](#manage-finality-config), [Manage Token Transfer Fee Config](#manage-token-transfer-fee-config) |                                                       |
+| `OUTBOUND_RATE_LIMIT_CAPACITY`, `OUTBOUND_RATE_LIMIT_RATE`, `OUTBOUND_RATE_LIMIT_ENABLED`                                                                                     | [Step 5: Apply Chain Updates](#step-5-apply-chain-updates-configure-cross-chain-routes), [Manage Rate Limiters](#manage-rate-limiters), [Manage Finality Config](#manage-finality-config)                                                                                                                     |                                                       |
+| `INBOUND_RATE_LIMIT_CAPACITY`, `INBOUND_RATE_LIMIT_RATE`, `INBOUND_RATE_LIMIT_ENABLED`                                                                                        | [Step 5: Apply Chain Updates](#step-5-apply-chain-updates-configure-cross-chain-routes), [Manage Rate Limiters](#manage-rate-limiters), [Manage Finality Config](#manage-finality-config)                                                                                                                     |                                                       |
+| `FAST_FINALITY`                                                                                                                                                               | [Manage Rate Limiters](#manage-rate-limiters), [Manage Finality Config](#manage-finality-config)                                                                                                                                                                                                              |                                                       |
+| `AMOUNT`                                                                                                                                                                      | [Mint Tokens](#mint-tokens), [Deposit to LockBox](#deposit-to-lockbox), [Withdraw from LockBox](#withdraw-from-lockbox)                                                                                                                                                                                       | `script/input/token.json`                             |
+| `MINT_RECEIVER`                                                                                                                                                               | [Mint Tokens](#mint-tokens)                                                                                                                                                                                                                                                                                   |                                                       |
+| `RECIPIENT`                                                                                                                                                                   | [Withdraw from LockBox](#withdraw-from-lockbox), [Withdraw Fee Tokens](#withdraw-fee-tokens)                                                                                                                                                                                                                  |                                                       |
+| `FEE_TOKENS`                                                                                                                                                                  | [Get Fee Token Balances](#get-fee-token-balances), [Withdraw Fee Tokens](#withdraw-fee-tokens)                                                                                                                                                                                                                |                                                       |
+| `ROUTER`, `RATE_LIMIT_ADMIN`, `FEE_ADMIN`                                                                                                                                     | [Manage Dynamic Config](#manage-dynamic-config)                                                                                                                                                                                                                                                               |                                                       |
+| `BLOCK_DEPTH`, `WAIT_FOR_SAFE`                                                                                                                                                | [Manage Finality Config](#manage-finality-config)                                                                                                                                                                                                                                                             |                                                       |
+| `REMOTE_POOL_ADDRESS`                                                                                                                                                         | [Manage Remote Pools](#manage-remote-pools)                                                                                                                                                                                                                                                                   |                                                       |
+| `ALLOWLIST`, `THRESHOLD_AMOUNT`, `POLICY_ENGINE`                                                                                                                              | [Deploy Advanced Pool Hooks](#deploy-advanced-pool-hooks)                                                                                                                                                                                                                                                     | `script/input/advanced-pool-hooks.json`               |
+| `NEW_HOOK`                                                                                                                                                                    | [Connect Advanced Pool Hooks to a Token Pool](#connect-advanced-pool-hooks-to-a-token-pool)                                                                                                                                                                                                                   |                                                       |
+| `ENTITY_TYPE`                                                                                                                                                                 | [Transfer Ownership](#transfer-ownership)                                                                                                                                                                                                                                                                     |                                                       |
+| `ADDRESS`                                                                                                                                                                     | [Transfer Ownership](#transfer-ownership)                                                                                                                                                                                                                                                                     |                                                       |
+| `NEW_OWNER`                                                                                                                                                                   | [Transfer Ownership](#transfer-ownership)                                                                                                                                                                                                                                                                     |                                                       |
+| `NEW_ADMIN`                                                                                                                                                                   | [Transfer Token Admin Role](#transfer-token-admin-role)                                                                                                                                                                                                                                                       |                                                       |
+| `ADD_ADDRESSES`, `REMOVE_ADDRESSES`                                                                                                                                           | [Manage Allowlist](#manage-allowlist), [Manage Authorized Callers](#manage-authorized-callers)                                                                                                                                                                                                                |                                                       |
+| `CHECK_ADDRESS`                                                                                                                                                               | [Manage Allowlist](#manage-allowlist)                                                                                                                                                                                                                                                                         |                                                       |
+| `DEST_GAS_OVERHEAD`, `DEST_BYTES_OVERHEAD`, `FINALITY_FEE_USD_CENTS`, `FAST_FINALITY_FEE_USD_CENTS`, `FINALITY_TRANSFER_FEE_BPS`, `FAST_FINALITY_TRANSFER_FEE_BPS`, `DISABLE` | [Manage Token Transfer Fee Config](#manage-token-transfer-fee-config)                                                                                                                                                                                                                                         |                                                       |
 
 ## Testing
 

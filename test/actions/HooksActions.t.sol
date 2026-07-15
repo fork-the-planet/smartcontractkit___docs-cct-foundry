@@ -7,8 +7,8 @@ import {CctActions} from "../../src/actions/CctActions.sol";
 import {DeployAdvancedPoolHooks} from "../../script/configure/allowlist/DeployAdvancedPoolHooks.s.sol";
 import {BaseForkTest} from "../BaseForkTest.t.sol";
 
-/// @notice Fork parity tests for the PR 1.2 rollout of the `allowlist/` and `authorized-callers/` write
-/// scripts. Hooks are deployed from the repo's own `DeployAdvancedPoolHooks` script (driven by
+/// @notice Fork parity tests for the `allowlist/` and `authorized-callers/` write scripts. Hooks are
+/// deployed from the repo's own `DeployAdvancedPoolHooks` script (driven by
 /// `script/input/advanced-pool-hooks.json`, with the allowlist overridden via the `ALLOWLIST` env var);
 /// allowlist and authorized-caller state changes are exercised through the `CctActions` builders and
 /// asserted via `getAllowList` / `checkAllowList` / `getAllAuthorizedCallers`.

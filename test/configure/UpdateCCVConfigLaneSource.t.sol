@@ -216,7 +216,7 @@ contract UpdateCCVConfigLaneSourceTest is LaneReconcileScratch {
                 vm.toString(E1),
                 "] diverges from declared lanes.zz-scratch-ccvsrc-r4.v2.ccv.outboundCCVs=[",
                 vm.toString(LANE1),
-                "] in config/chains/",
+                "] in project/",
                 local,
                 ".json - make doctor will WARN until reconciled"
             ),
@@ -227,7 +227,7 @@ contract UpdateCCVConfigLaneSourceTest is LaneReconcileScratch {
         assertEq(
             res.editHintText,
             string.concat(
-                unicode"⚠️  Applied CCV config is diverging from lanes.zz-scratch-ccvsrc-r4.v2.ccv (config/chains/",
+                unicode"⚠️  Applied CCV config is diverging from lanes.zz-scratch-ccvsrc-r4.v2.ccv (project/",
                 local,
                 ".json). Hand-edit the block to the applied values: outboundCCVs=[",
                 vm.toString(E1),
@@ -260,7 +260,7 @@ contract UpdateCCVConfigLaneSourceTest is LaneReconcileScratch {
         assertEq(
             res.editHintText,
             string.concat(
-                unicode"⚠️  Applied CCV config is not declared in lanes.zz-scratch-ccvsrc-r7.v2.ccv (config/chains/",
+                unicode"⚠️  Applied CCV config is not declared in lanes.zz-scratch-ccvsrc-r7.v2.ccv (project/",
                 local,
                 ".json). Hand-edit the block to the applied values: outboundCCVs=[",
                 vm.toString(E1),

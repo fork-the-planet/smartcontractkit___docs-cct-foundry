@@ -86,7 +86,7 @@ contract ApplyChainUpdatesForkTest is BaseForkTest {
             pool.isSupportedChain(helperConfig.getSolanaDevnetConfig().chainSelector),
             "committed example: Solana Devnet not configured"
         );
-        // The example's second entry carries two remote pools — both must be registered byte-for-byte.
+        // The example's second entry carries two remote pools — both must be registered.
         assertEq(
             pool.getRemotePools(helperConfig.getPlumeTestnetConfig().chainSelector).length,
             2,

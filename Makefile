@@ -35,6 +35,15 @@ define canon-chain-config
 @tmp="$$(mktemp)" && jq --indent 2 -S . "$(CONFIG_DIR)/$(CHAIN).json" > "$$tmp" && mv "$$tmp" "$(CONFIG_DIR)/$(CHAIN).json"
 endef
 
+# Canonical JSON for project/*.json: sorted keys, 2-space indent, and NO trailing newline (forge's
+# `vm.writeJson` — the ONLY writer of project files — omits the trailing newline, and project state is
+# never round-tripped through jq in the normal flow, so its canonical form is the writer's exact output;
+# see docs/deployed-addresses.md). This REPAIR target strips jq's trailing newline to match. Repair
+# tool only — the writers already emit this form on the direct forge path.
+define canon-project
+@test -f "project/$(CHAIN).json" && { tmp="$$(mktemp)" && jq --indent 2 -S . "project/$(CHAIN).json" > "$$tmp" && printf '%s' "$$(cat "$$tmp")" > "project/$(CHAIN).json" && rm -f "$$tmp"; } || true
+endef
+
 help: ## List the available targets
 	@echo "Chain-config tooling golden path (raw commands: README.md > Chain config tooling):"
 	@awk 'BEGIN {FS = ":.*## "} /^[a-z][a-z-]*:.*## / {printf "  %-14s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -101,11 +110,15 @@ endif
 	done
 	@echo "review the lane policy diff (lanes{} = owner policy), then: make doctor CHAIN=$(LOCAL)"
 
-adopt-token: tools ## Adopt an externally deployed token into the registry (CHAIN= TOKEN= required; TOKEN_POOL= optional)
-	$(if $(CHAIN),,$(error CHAIN is required: make adopt-token CHAIN=<name> TOKEN=<addr> [TOKEN_POOL=<addr>]))
-	$(if $(TOKEN),,$(error TOKEN is required - the externally deployed token address to adopt))
+adopt-token: tools ## Adopt an externally deployed token into project/<CHAIN>.json (EVM: CHAIN= TOKEN= [TOKEN_POOL=]; non-EVM: CHAIN= TOKEN_B58= [POOL_B58=])
+	$(if $(CHAIN),,$(error CHAIN is required: make adopt-token CHAIN=<name> TOKEN=<addr> [TOKEN_POOL=<addr>], or non-EVM: TOKEN_B58=<base58> [POOL_B58=<base58>]))
 	$(require-chain-config)
+ifdef TOKEN_B58
+	FOUNDRY_PROFILE=sync forge script script/config/AdoptToken.s.sol --sig "runNonEvm(string,string,string)" "$(CHAIN)" "$(TOKEN_B58)" "$(POOL_B58)"
+else
+	$(if $(TOKEN),,$(error TOKEN is required - the externally deployed token address to adopt (or TOKEN_B58 for a non-EVM chain)))
 	FOUNDRY_PROFILE=sync forge script script/config/AdoptToken.s.sol --sig "run(string,address,address)" "$(CHAIN)" "$(TOKEN)" "$(or $(TOKEN_POOL),0x0000000000000000000000000000000000000000)"
+endif
 
 sync: tools ## Refresh <CHAIN>'s ccip{} block from the live API (CHAIN= required)
 	$(if $(CHAIN),,$(error CHAIN is required: make sync CHAIN=<name>))
@@ -129,12 +142,17 @@ sync-all: tools ## Refresh every configured chain (non-EVM chains SKIP; failures
 	if [ -n "$$failed" ]; then echo "sync-all: FAILED for:$$failed"; exit 1; fi; \
 	echo "sync-all: OK - every configured chain synced (or SKIPped)"
 
-fmt-config: tools ## Rewrite config/chains/*.json in the canonical style (jq --indent 2 -S, trailing newline)
+fmt-config: tools ## Repair canonical JSON: config/chains/*.json (jq -S + trailing newline) AND project/*.json (jq -S, NO trailing newline)
 	@for f in $(CONFIG_DIR)/*.json; do \
 		case "$$f" in *zz-scratch-*) continue ;; esac; \
 		tmp="$$(mktemp)" && jq --indent 2 -S . "$$f" > "$$tmp" && mv "$$tmp" "$$f"; \
 	done; \
-	echo "fmt-config: canonicalized $(CONFIG_DIR)/*.json"
+	for f in project/*.json; do \
+		[ -e "$$f" ] || continue; \
+		case "$$f" in *zz-scratch-*|*.example.json) continue ;; esac; \
+		tmp="$$(mktemp)" && jq --indent 2 -S . "$$f" > "$$tmp" && printf '%s' "$$(cat "$$tmp")" > "$$f" && rm -f "$$tmp"; \
+	done; \
+	echo "fmt-config: canonicalized $(CONFIG_DIR)/*.json and project/*.json"
 
 sync-check: tools ## Read-only drift check (CHAIN= optional; pass/fail only - CI uses the script for 0/1/2)
 	@bash script/config/sync-check.sh $(CHAIN)
@@ -154,8 +172,8 @@ snapshot-chain: tools ## Backfill the declared roles{} authority block FROM chai
 	$(if $(CHAIN),,$(error CHAIN is required: make snapshot-chain CHAIN=<name>))
 	$(require-chain-config)
 	FOUNDRY_PROFILE=sync forge script script/config/SnapshotChain.s.sol --sig "run(string)" "$(CHAIN)"
-	$(canon-chain-config)
-	@echo "review the roles{} diff (roles{} = declared authority), then reconcile: make roles-check CHAIN=$(CHAIN)"
+	$(canon-project)
+	@echo "review the roles{} diff in project/$(CHAIN).json (roles{} = declared authority), then reconcile: make roles-check CHAIN=$(CHAIN)"
 
 roles-check: tools ## READ-ONLY reconcile of a chain's declared roles{} vs the live chain (CHAIN= optional; pass/fail only - CI uses the script for 0/1/2)
 	@bash script/config/roles-check.sh $(CHAIN)

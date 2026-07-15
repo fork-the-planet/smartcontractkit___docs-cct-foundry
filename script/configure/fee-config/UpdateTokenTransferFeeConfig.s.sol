@@ -35,9 +35,9 @@ import {EoaExecutor} from "../../../src/base/EoaExecutor.s.sol";
 ///   DISABLE  - true/false, set to true to disable the fee config for this lane (default: false)
 ///
 /// Fee-config input resolution ladder (PER FIELD — the same env-over-lanes{} ladder
-/// ApplyChainUpdates and UpdateRateLimiters use, extending the script's historical per-field env
-/// semantics, where each unset env var independently fell back to the current on-chain value):
-///   1. Env var set → the env value wins, byte-for-byte the historical behavior. When the local
+/// ApplyChainUpdates and UpdateRateLimiters use, resolved per field: each unset env var
+/// independently falls back to the current on-chain value):
+///   1. Env var set → the env value wins. When the local
 ///      chain config declares a diverging `lanes.<remote>.v2.feeConfig.<field>`, a one-line console
 ///      notice names both values (`make doctor` WARNs until reconciled) and the closing output
 ///      prints a hand-edit remediation hint.
@@ -293,8 +293,9 @@ contract UpdateTokenTransferFeeConfig is EoaExecutor, LanePolicySource {
         string[NUM_FEE_FIELDS] memory envNames = _feeEnvNames();
         string[NUM_FEE_FIELDS] memory fieldNames = _feeFieldNames();
 
-        string memory json;
-        (res.configFound, res.configName, json) = _findLocalChainConfig();
+        // Chain existence + name from config/chains; the lanes{} policy from the project store.
+        (res.configFound, res.configName,) = _findLocalChainConfig();
+        string memory json = _localProjectJson(res.configName);
         if (res.configFound) (res.laneFound, res.laneKey) = _findLaneKey(json, destChainName, destChainSelector);
         // When no entry matched, notices and hints still name the entry to declare: the remote's
         // config file basename (the key `make add-lane` would write).
@@ -311,7 +312,7 @@ contract UpdateTokenTransferFeeConfig is EoaExecutor, LanePolicySource {
                 if (f.declared) f.declaredValue = vm.parseJsonUint(json, fieldKey);
             }
             if (f.fromEnv) {
-                // Rung 1: the env value wins byte-for-byte; a declared disagreeing field is a
+                // Rung 1: the env value wins; a declared disagreeing field is a
                 // notice, never a revert (the doctor WARNs until reconciled).
                 f.value = _envUint(envNames[i]);
                 f.diverges = f.declared && f.value != f.declaredValue;
@@ -354,7 +355,7 @@ contract UpdateTokenTransferFeeConfig is EoaExecutor, LanePolicySource {
             _feeFieldNames()[i],
             "=",
             vm.toString(f.declaredValue),
-            " in config/chains/",
+            " in project/",
             res.configName,
             ".json - make doctor will WARN until reconciled"
         );
@@ -368,7 +369,7 @@ contract UpdateTokenTransferFeeConfig is EoaExecutor, LanePolicySource {
                 string.concat(
                     "Fee config resolved from lanes.",
                     res.laneKey,
-                    ".v2.feeConfig in config/chains/",
+                    ".v2.feeConfig in project/",
                     res.configName,
                     ".json (undeclared fields keep the current on-chain values)"
                 )
@@ -385,7 +386,7 @@ contract UpdateTokenTransferFeeConfig is EoaExecutor, LanePolicySource {
                     "No fee-config env vars and no declared lanes.",
                     res.laneKey,
                     ".v2.feeConfig",
-                    res.configFound ? string.concat(" in config/chains/", res.configName, ".json") : "",
+                    res.configFound ? string.concat(" in project/", res.configName, ".json") : "",
                     "; applying the current on-chain values (historical default). Set the env vars, or declare the block."
                 )
             );
@@ -415,7 +416,7 @@ contract UpdateTokenTransferFeeConfig is EoaExecutor, LanePolicySource {
             res.blockDeclared ? "diverging from" : "not declared in",
             " lanes.",
             res.laneKey,
-            ".v2.feeConfig (config/chains/",
+            ".v2.feeConfig (project/",
             res.configName,
             ".json). Hand-edit the block to the applied values: ",
             values,

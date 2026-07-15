@@ -9,14 +9,23 @@
 # (test/fixtures/ccip-api/) served by a local python3 http.server.
 #
 # Run from the repo root: bash script/config/test-tooling.sh
+#
+# PARTITIONS (TOOLING_PARTITION env): `offline` runs only the cases that need no live CCIP API (guards,
+# make-arg preflights, the local-fixture-server sync, the canonical-format checks, and the committed-tree
+# gates) — the fast PR-blocking set. `live` runs only the cases that reach the real API (selector/drift
+# resolution, sync-check, the API-fetching doctor rungs) — the scheduled set. `all` (default) runs both.
 set -uo pipefail
 
 cd "$(dirname "$0")/../.."
 
+PARTITION="${TOOLING_PARTITION:-all}"
+
 TMP_CHAIN="tooling-tmp"
 TMP_FILE="config/chains/${TMP_CHAIN}.json"
+PROJECT_FILE="project/${TMP_CHAIN}.json"
 TMP_CHAIN_B="tooling-tmp-b"
 TMP_FILE_B="config/chains/${TMP_CHAIN_B}.json"
+PROJECT_FILE_B="project/${TMP_CHAIN_B}.json"
 FIXTURE="test/fixtures/ccip-api/chain-16015286601757825753.json"
 SEPOLIA_SELECTOR="16015286601757825753"
 # A real, non-bundled chain used by the add-chain print-names case; its generated config is a
@@ -31,14 +40,18 @@ server_pid=""
 server_dir=""
 
 cleanup() {
-    rm -f "$TMP_FILE" "$TMP_FILE_B" "$FUJI_FILE"
+    rm -f "$TMP_FILE" "$TMP_FILE_B" "$FUJI_FILE" "$PROJECT_FILE" "$PROJECT_FILE_B"
     [ -n "$server_pid" ] && kill "$server_pid" 2> /dev/null
     [ -n "$server_dir" ] && rm -rf "$server_dir"
 }
 trap cleanup EXIT
 
-# run_case <name> <expected: zero|nonzero> <grep-pattern> -- <cmd...>
-run_case() {
+# Partition gates: an offline case is skipped under PARTITION=live; a live case under PARTITION=offline.
+offline_enabled() { [ "$PARTITION" != live ]; }
+live_enabled() { [ "$PARTITION" != offline ]; }
+
+# _run_case <name> <expected: zero|nonzero> <grep-pattern> -- <cmd...>
+_run_case() {
     local name="$1" expect="$2" pattern="$3"
     shift 4 # name expect pattern --
     local out status
@@ -58,6 +71,11 @@ run_case() {
         echo "$out" | tail -8 | sed 's/^/       | /'
     fi
 }
+
+# Offline case (needs no live API): runs in the `offline` and `all` partitions.
+run_case() { offline_enabled && _run_case "$@"; }
+# Live case (reaches the real CCIP API): runs in the `live` and `all` partitions.
+run_case_live() { live_enabled && _run_case "$@"; }
 
 sync_script() {
     FOUNDRY_PROFILE=sync forge script script/config/SyncCcipConfig.s.sol "$@"
@@ -107,11 +125,10 @@ cat > "$TMP_FILE" << 'EOF'
     "confirmations": 2,
     "explorerUrl": "",
     "nativeCurrencySymbol": "",
-    "ccipBnM": "0x0000000000000000000000000000000000000000",
     "ccip": {}
 }
 EOF
-run_case "wrong selector -> SELECTOR MISMATCH naming both chainIds" nonzero \
+run_case_live "wrong selector -> SELECTOR MISMATCH naming both chainIds" nonzero \
     "SELECTOR MISMATCH for tooling-tmp: config says chainId 99999 but the selector resolves to chainId 11155111" -- \
     sync_script --sig "run(string)" "$TMP_CHAIN"
 
@@ -124,7 +141,7 @@ d = json.load(open('$TMP_FILE'))
 d['chainId'] = '11155111'; d['name'] = 'ethereum-sepolia'
 json.dump(d, open('$TMP_FILE','w'), indent=4)
 "
-run_case "non-canonical name -> SELECTOR NAME MISMATCH names the canonical selectorName" nonzero \
+run_case_live "non-canonical name -> SELECTOR NAME MISMATCH names the canonical selectorName" nonzero \
     "SELECTOR NAME MISMATCH for tooling-tmp: config name 'ethereum-sepolia' is not the canonical selectorName" -- \
     sync_script --sig "run(string)" "$TMP_CHAIN"
 
@@ -133,13 +150,13 @@ python3 -c "
 import json
 d = json.load(open('$TMP_FILE')); d['chainSelector'] = '123'; json.dump(d, open('$TMP_FILE','w'), indent=4)
 "
-run_case "unknown selector -> named NOT_FOUND error" nonzero "NOT_FOUND: no chain for selector 123" -- \
+run_case_live "unknown selector -> named NOT_FOUND error" nonzero "NOT_FOUND: no chain for selector 123" -- \
     sync_script --sig "run(string)" "$TMP_CHAIN"
 rm -f "$TMP_FILE"
 
 # 7b. add-chain enforces the selectorName too: a non-canonical CHAIN name for a real selector fails
 #     up front (this is the guard path that also validates non-EVM chains, whose chainId is "0").
-run_case "add-chain rejects a non-canonical name -> SELECTOR NAME MISMATCH" nonzero \
+run_case_live "add-chain rejects a non-canonical name -> SELECTOR NAME MISMATCH" nonzero \
     "SELECTOR NAME MISMATCH for ethereum-sepolia: config name 'ethereum-sepolia' is not the canonical selectorName" -- \
     sync_script --sig "init(string,uint256)" ethereum-sepolia "$SEPOLIA_SELECTOR"
 
@@ -147,63 +164,66 @@ run_case "add-chain rejects a non-canonical name -> SELECTOR NAME MISMATCH" nonz
 #     the JSON) which var to export. Uses a real, non-bundled chain (Fuji) whose UPPER_SNAKE-derived
 #     AVALANCHE_TESTNET_FUJI differs from a curated short form; the generated config is a throwaway
 #     removed here and in cleanup(). Asserts BOTH the chainNameIdentifier and the rpcEnv line.
-rm -f "$FUJI_FILE"
-out="$(sync_script --sig "init(string,uint256)" "$FUJI_CHAIN" "$FUJI_SELECTOR" 2>&1)"
-if echo "$out" | grep -q "chainNameIdentifier: AVALANCHE_TESTNET_FUJI" &&
-    echo "$out" | grep -q "rpcEnv: *AVALANCHE_TESTNET_FUJI_RPC_URL"; then
-    pass=$((pass + 1))
-    echo "[PASS] add-chain prints the generated chainNameIdentifier + rpcEnv names"
-else
-    fail=$((fail + 1))
-    failures+=("add-chain prints env-var names")
-    echo "[FAIL] add-chain prints env-var names (missing chainNameIdentifier/rpcEnv line)"
-    echo "$out" | tail -8 | sed 's/^/       | /'
+if live_enabled; then
+    rm -f "$FUJI_FILE"
+    out="$(sync_script --sig "init(string,uint256)" "$FUJI_CHAIN" "$FUJI_SELECTOR" 2>&1)"
+    if echo "$out" | grep -q "chainNameIdentifier: AVALANCHE_TESTNET_FUJI" &&
+        echo "$out" | grep -q "rpcEnv: *AVALANCHE_TESTNET_FUJI_RPC_URL"; then
+        pass=$((pass + 1))
+        echo "[PASS] add-chain prints the generated chainNameIdentifier + rpcEnv names"
+    else
+        fail=$((fail + 1))
+        failures+=("add-chain prints env-var names")
+        echo "[FAIL] add-chain prints env-var names (missing chainNameIdentifier/rpcEnv line)"
+        echo "$out" | tail -8 | sed 's/^/       | /'
+    fi
+    rm -f "$FUJI_FILE"
 fi
-rm -f "$FUJI_FILE"
 
 # 8. API down (CCIP_API_BASE override) -> distinct API_UNREACHABLE error
-run_case "API down -> named API_UNREACHABLE error" nonzero "API_UNREACHABLE" -- \
+run_case_live "API down -> named API_UNREACHABLE error" nonzero "API_UNREACHABLE" -- \
     env CCIP_API_BASE=http://127.0.0.1:1 bash -c \
     'FOUNDRY_PROFILE=sync forge script script/config/SyncCcipConfig.s.sol --sig "run(string)" ethereum-testnet-sepolia-mantle-1'
 
 # ---------------------------------------------------------------- sync-check exit contract (0/1/2)
 
 # 9. clean chain -> exit 0 (live API)
-run_case "sync-check clean chain exits 0" zero "CLEAN" -- \
+run_case_live "sync-check clean chain exits 0" zero "CLEAN" -- \
     bash script/config/sync-check.sh ethereum-testnet-sepolia-mantle-1
 
-# 10. drift (mutated router on a throwaway COPY of ethereum-testnet-sepolia) -> exit 1 + DRIFT line
-python3 -c "
+# 10 + 11. drift (exit 1 + DRIFT line) and API-down (exit 2) on a throwaway COPY of sepolia.
+if live_enabled; then
+    python3 -c "
 import json
 d = json.load(open('config/chains/ethereum-testnet-sepolia.json'))
 d['ccip']['router'] = '0x0000000000000000000000000000000000000001'
 json.dump(d, open('$TMP_FILE','w'), indent=4)
 "
-out="$(bash script/config/sync-check.sh "$TMP_CHAIN" 2>&1)"
-status=$?
-if [ $status -eq 1 ] && echo "$out" | grep -q "DRIFT tooling-tmp .ccip.router"; then
-    pass=$((pass + 1))
-    echo "[PASS] sync-check classifies drift as exit 1 + DRIFT line"
-else
-    fail=$((fail + 1))
-    failures+=("sync-check drift")
-    echo "[FAIL] sync-check drift (exit=$status)"
-    echo "$out" | tail -6 | sed 's/^/       | /'
-fi
+    out="$(bash script/config/sync-check.sh "$TMP_CHAIN" 2>&1)"
+    status=$?
+    if [ $status -eq 1 ] && echo "$out" | grep -q "DRIFT tooling-tmp .ccip.router"; then
+        pass=$((pass + 1))
+        echo "[PASS] sync-check classifies drift as exit 1 + DRIFT line"
+    else
+        fail=$((fail + 1))
+        failures+=("sync-check drift")
+        echo "[FAIL] sync-check drift (exit=$status)"
+        echo "$out" | tail -6 | sed 's/^/       | /'
+    fi
 
-# 11. API down -> exit 2 (flake, not drift)
-out="$(CCIP_API_BASE=http://127.0.0.1:1 bash script/config/sync-check.sh "$TMP_CHAIN" 2>&1)"
-status=$?
-if [ $status -eq 2 ] && echo "$out" | grep -q "API_UNREACHABLE"; then
-    pass=$((pass + 1))
-    echo "[PASS] sync-check classifies API-down as exit 2"
-else
-    fail=$((fail + 1))
-    failures+=("sync-check api-down")
-    echo "[FAIL] sync-check api-down (exit=$status)"
-    echo "$out" | tail -6 | sed 's/^/       | /'
+    out="$(CCIP_API_BASE=http://127.0.0.1:1 bash script/config/sync-check.sh "$TMP_CHAIN" 2>&1)"
+    status=$?
+    if [ $status -eq 2 ] && echo "$out" | grep -q "API_UNREACHABLE"; then
+        pass=$((pass + 1))
+        echo "[PASS] sync-check classifies API-down as exit 2"
+    else
+        fail=$((fail + 1))
+        failures+=("sync-check api-down")
+        echo "[FAIL] sync-check api-down (exit=$status)"
+        echo "$out" | tail -6 | sed 's/^/       | /'
+    fi
+    rm -f "$TMP_FILE"
 fi
-rm -f "$TMP_FILE"
 
 # ---------------------------------------------------------------- fixture transform (offline)
 
@@ -277,7 +297,7 @@ fi
 
 # 12b. API-served fields sourced from the API: a HAND-EDITED displayName/environment/explorerUrl/
 #      nativeCurrencySymbol is CORRECTED to the API value on sync, while the genuinely hand-authored
-#      keys (confirmations, ccipBnM, rpcEnv, chainNameIdentifier) survive VERBATIM. This is the
+#      keys (confirmations, rpcEnv, chainNameIdentifier) survive VERBATIM. This is the
 #      one-writer-per-field guarantee for the widened synced surface.
 cat > "$TMP_FILE" << 'EOF'
 {
@@ -292,7 +312,6 @@ cat > "$TMP_FILE" << 'EOF'
   "confirmations": 7,
   "explorerUrl": "http://hand.example/wrong",
   "nativeCurrencySymbol": "XXX",
-  "ccipBnM": "0x000000000000000000000000000000000000dEaD",
   "ccip": {}
 }
 EOF
@@ -312,7 +331,6 @@ assert d['nativeCurrencySymbol'] == api['nativeCurrencySymbol'], ('nativeCurrenc
 assert d['chainFamily'] == 'evm', ('chainFamily not normalized', d['chainFamily'])
 # genuinely hand-authored keys survive verbatim
 assert d['confirmations'] == 7, ('confirmations clobbered', d['confirmations'])
-assert d['ccipBnM'].lower() == '0x000000000000000000000000000000000000dead', ('ccipBnM clobbered', d['ccipBnM'])
 assert d['rpcEnv'] == 'CUSTOM_HAND_RPC_URL', ('rpcEnv clobbered', d['rpcEnv'])
 assert d['chainNameIdentifier'] == 'CUSTOM_HAND_ID', ('chainNameIdentifier clobbered', d['chainNameIdentifier'])
 print('SOURCE_OK')
@@ -362,13 +380,14 @@ run_case "check-chain unknown chain FAILs with the add-chain hint" nonzero "conf
     env FOUNDRY_PROFILE=sync forge script script/config/VerifyChain.s.sol --tc VerifyChain --sig "run(string)" doesnotexist
 
 # 15. non-EVM chain -> schema parse only, 0 FAIL
-run_case "check-chain on solana-devnet passes (non-EVM path)" zero "0 FAIL" -- \
+run_case_live "check-chain on solana-devnet passes (non-EVM path)" zero "0 FAIL" -- \
     env FOUNDRY_PROFILE=sync forge script script/config/VerifyChain.s.sol --tc VerifyChain --sig "run(string)" solana-devnet
 
 # 16. EVM chain with rpcEnv unset -> rpc SKIP (not FAIL), overall 0 FAIL (live API for the drift rung)
-run_case "check-chain SKIPs rpc when the rpcEnv var is unset" zero "\[SKIP\] rpc: env MANTLE_SEPOLIA_RPC_URL unset" -- \
+run_case_live "check-chain SKIPs rpc when the rpcEnv var is unset" zero "\[SKIP\] rpc: env MANTLE_SEPOLIA_RPC_URL unset" -- \
     env -u MANTLE_SEPOLIA_RPC_URL FOUNDRY_PROFILE=sync \
     forge script script/config/VerifyChain.s.sol --tc VerifyChain --sig "run(string)" ethereum-testnet-sepolia-mantle-1
+
 
 # ---------------------------------------------------------------- Makefile golden path
 
@@ -389,24 +408,26 @@ run_case "make doctor without CHAIN errors up front" nonzero "CHAIN is required"
 # 18. the make exit-code remap: the canonical 0/1/2 contract belongs to sync-check.sh (case 10
 #     proved drift -> exit 1 there); GNU make remaps ANY failing recipe to ITS OWN exit 2, so
 #     `make sync-check` reports the same drift as exit 2 - pass/fail only. CI must call the script.
-python3 -c "
+if live_enabled; then
+    python3 -c "
 import json
 d = json.load(open('config/chains/ethereum-testnet-sepolia.json'))
 d['ccip']['router'] = '0x0000000000000000000000000000000000000001'
 json.dump(d, open('$TMP_FILE','w'), indent=4)
 "
-out="$(make sync-check CHAIN="$TMP_CHAIN" 2>&1)"
-status=$?
-if [ $status -eq 2 ] && echo "$out" | grep -q "CONFIG_DRIFT"; then
-    pass=$((pass + 1))
-    echo "[PASS] make sync-check remaps the script's drift exit 1 to make exit 2 (pass/fail only)"
-else
-    fail=$((fail + 1))
-    failures+=("make sync-check remap")
-    echo "[FAIL] make sync-check remap (exit=$status, expected 2 + /CONFIG_DRIFT/)"
-    echo "$out" | tail -6 | sed 's/^/       | /'
+    out="$(make sync-check CHAIN="$TMP_CHAIN" 2>&1)"
+    status=$?
+    if [ $status -eq 2 ] && echo "$out" | grep -q "CONFIG_DRIFT"; then
+        pass=$((pass + 1))
+        echo "[PASS] make sync-check remaps the script's drift exit 1 to make exit 2 (pass/fail only)"
+    else
+        fail=$((fail + 1))
+        failures+=("make sync-check remap")
+        echo "[FAIL] make sync-check remap (exit=$status, expected 2 + /CONFIG_DRIFT/)"
+        echo "$out" | tail -6 | sed 's/^/       | /'
+    fi
+    rm -f "$TMP_FILE"
 fi
-rm -f "$TMP_FILE"
 
 # ---------------------------------------------------------------- add-lane + mesh doctor
 
@@ -452,14 +473,14 @@ for name, cid, sel in [('$TMP_CHAIN','990001','9900010000000000001'),
     d2['name'] = name; d2['chainId'] = cid; d2['chainSelector'] = sel
     d2['chainNameIdentifier'] = name.upper().replace('-','_')
     d2['rpcEnv'] = d2['chainNameIdentifier'] + '_RPC_URL'
-    d2['lanes'] = {}
     json.dump(d2, open('config/chains/%s.json' % name,'w'), indent=2, sort_keys=True)
 "
+rm -f "$PROJECT_FILE" "$PROJECT_FILE_B"
 out="$(make add-lane LOCAL="$TMP_CHAIN" REMOTE="$TMP_CHAIN_B" CAPACITY=1000 RATE=10 2>&1)"
 status=$?
 if [ $status -eq 0 ] &&
     echo "$out" | grep -q "wrote lane $TMP_CHAIN -> $TMP_CHAIN_B remoteSelector=9900020000000000002" &&
-    echo "$out" | grep -q "WARN: no tokenPool in addresses/990002.json for $TMP_CHAIN_B"; then
+    echo "$out" | grep -q "WARN: no tokenPool in project/$TMP_CHAIN_B.json"; then
     pass=$((pass + 1))
     echo "[PASS] add-lane writes the lane + WARNs on the remote's placeholder pool (names the missing deploy)"
 else
@@ -470,13 +491,13 @@ else
 fi
 
 # 26. identical re-run (SAME capacity/rate the lane was written with) -> logged no-op, byte-identical.
-before="$(shasum "$TMP_FILE")"
+before="$(shasum "$PROJECT_FILE")"
 run_case "add-lane identical re-run is a logged no-op" zero "already exists - no-op" -- \
     make add-lane LOCAL="$TMP_CHAIN" REMOTE="$TMP_CHAIN_B" CAPACITY=1000 RATE=10
-after="$(shasum "$TMP_FILE")"
+after="$(shasum "$PROJECT_FILE")"
 if [ "$before" = "$after" ]; then
     pass=$((pass + 1))
-    echo "[PASS] add-lane identical re-run left ${TMP_CHAIN}.json byte-identical"
+    echo "[PASS] add-lane identical re-run left project/${TMP_CHAIN}.json byte-identical"
 else
     fail=$((fail + 1))
     failures+=("add-lane identical re-run byte-identical")
@@ -485,14 +506,14 @@ fi
 
 # 26b. changed args (DIFFERENT capacity/rate) on an existing entry -> WARN naming existing vs
 #      requested, entry left UNCHANGED (never a silent policy rewrite, never a silent no-op).
-before="$(shasum "$TMP_FILE")"
+before="$(shasum "$PROJECT_FILE")"
 run_case "add-lane changed args WARNs and leaves the entry unchanged" zero \
     "already exists with DIFFERENT policy (existing capacity=1000 rate=10, requested capacity=5 rate=5)" -- \
     make add-lane LOCAL="$TMP_CHAIN" REMOTE="$TMP_CHAIN_B" CAPACITY=5 RATE=5
-after="$(shasum "$TMP_FILE")"
+after="$(shasum "$PROJECT_FILE")"
 if [ "$before" = "$after" ]; then
     pass=$((pass + 1))
-    echo "[PASS] add-lane changed-args left ${TMP_CHAIN}.json byte-identical"
+    echo "[PASS] add-lane changed-args left project/${TMP_CHAIN}.json byte-identical"
 else
     fail=$((fail + 1))
     failures+=("add-lane changed-args byte-identical")
@@ -529,9 +550,9 @@ for name, cid, sel in [('$TMP_CHAIN','990001','9900010000000000001'),
     d2['name'] = name; d2['chainId'] = cid; d2['chainSelector'] = sel
     d2['chainNameIdentifier'] = name.upper().replace('-','_')
     d2['rpcEnv'] = d2['chainNameIdentifier'] + '_RPC_URL'
-    d2['lanes'] = {}
     json.dump(d2, open('config/chains/%s.json' % name,'w'), indent=2, sort_keys=True)
 "
+rm -f "$PROJECT_FILE" "$PROJECT_FILE_B"
 out="$(make add-lane LOCAL="$TMP_CHAIN" REMOTE="$TMP_CHAIN_B" CAPACITY=1000 RATE=10 BOTH=1 2>&1)"
 status=$?
 if [ $status -eq 0 ] &&
@@ -566,15 +587,15 @@ for name, cid, sel in [('$TMP_CHAIN','990001','9900010000000000001'),
     d2['name'] = name; d2['chainId'] = cid; d2['chainSelector'] = sel
     d2['chainNameIdentifier'] = name.upper().replace('-','_')
     d2['rpcEnv'] = d2['chainNameIdentifier'] + '_RPC_URL'
-    d2['lanes'] = {}
     json.dump(d2, open('config/chains/%s.json' % name,'w'), indent=2, sort_keys=True)
 "
+rm -f "$PROJECT_FILE" "$PROJECT_FILE_B"
 out="$(make add-lane LOCAL="$TMP_CHAIN" REMOTE="$TMP_CHAIN_B" CAPACITY=1000 RATE=10 INBOUND_CAPACITY=55 INBOUND_RATE=5 2>&1)"
 status=$?
 if [ $status -eq 0 ] &&
     echo "$out" | grep -q "inboundCapacity=55 inboundRate=5" &&
-    [ "$(jq -r ".lanes[\"$TMP_CHAIN_B\"].inbound.capacity" "$TMP_FILE")" = "55" ] &&
-    [ "$(jq -r ".lanes[\"$TMP_CHAIN_B\"].inbound.rate" "$TMP_FILE")" = "5" ]; then
+    [ "$(jq -r ".lanes[\"$TMP_CHAIN_B\"].inbound.capacity" "$PROJECT_FILE")" = "55" ] &&
+    [ "$(jq -r ".lanes[\"$TMP_CHAIN_B\"].inbound.rate" "$PROJECT_FILE")" = "5" ]; then
     pass=$((pass + 1))
     echo "[PASS] add-lane INBOUND_* writes the inbound policy block"
 else
@@ -604,19 +625,19 @@ for name, cid, sel in [('$TMP_CHAIN','990001','9900010000000000001'),
     d2['name'] = name; d2['chainId'] = cid; d2['chainSelector'] = sel
     d2['chainNameIdentifier'] = name.upper().replace('-','_')
     d2['rpcEnv'] = d2['chainNameIdentifier'] + '_RPC_URL'
-    d2['lanes'] = {}
     json.dump(d2, open('config/chains/%s.json' % name,'w'), indent=2, sort_keys=True)
 "
+rm -f "$PROJECT_FILE" "$PROJECT_FILE_B"
 make add-lane LOCAL="$TMP_CHAIN" REMOTE="$TMP_CHAIN_B" CAPACITY=1000 RATE=10 > /dev/null 2>&1
 make add-lane LOCAL="$TMP_CHAIN" REMOTE=ethereum-testnet-sepolia CAPACITY=7 RATE=7 INBOUND_CAPACITY=55 INBOUND_RATE=5 > /dev/null 2>&1
 out="$(make remove-lane LOCAL="$TMP_CHAIN" REMOTE="$TMP_CHAIN_B" 2>&1)"
 status=$?
 if [ $status -eq 0 ] &&
-    echo "$out" | grep -q "removed lane $TMP_CHAIN -> $TMP_CHAIN_B from config/chains/$TMP_CHAIN.json" &&
+    echo "$out" | grep -q "removed lane $TMP_CHAIN -> $TMP_CHAIN_B from project/$TMP_CHAIN.json" &&
     echo "$out" | grep -q "the pool is untouched" &&
-    [ "$(jq -r ".lanes | has(\"$TMP_CHAIN_B\")" "$TMP_FILE")" = "false" ] &&
-    [ "$(jq -r '.lanes["ethereum-testnet-sepolia"].capacity' "$TMP_FILE")" = "7" ] &&
-    [ "$(jq -r '.lanes["ethereum-testnet-sepolia"].inbound.capacity' "$TMP_FILE")" = "55" ]; then
+    [ "$(jq -r ".lanes | has(\"$TMP_CHAIN_B\")" "$PROJECT_FILE")" = "false" ] &&
+    [ "$(jq -r '.lanes["ethereum-testnet-sepolia"].capacity' "$PROJECT_FILE")" = "7" ] &&
+    [ "$(jq -r '.lanes["ethereum-testnet-sepolia"].inbound.capacity' "$PROJECT_FILE")" = "55" ]; then
     pass=$((pass + 1))
     echo "[PASS] remove-lane removes the target entry, sibling lane (incl. inbound block) intact"
 else
@@ -627,13 +648,13 @@ else
 fi
 
 # 30c. removing an undeclared lane is a logged no-op, exit 0, file byte-identical.
-before="$(shasum "$TMP_FILE")"
+before="$(shasum "$PROJECT_FILE")"
 run_case "remove-lane on an undeclared lane is a logged no-op" zero "is not declared - no-op" -- \
     make remove-lane LOCAL="$TMP_CHAIN" REMOTE="$TMP_CHAIN_B"
-after="$(shasum "$TMP_FILE")"
+after="$(shasum "$PROJECT_FILE")"
 if [ "$before" = "$after" ]; then
     pass=$((pass + 1))
-    echo "[PASS] remove-lane no-op left ${TMP_CHAIN}.json byte-identical"
+    echo "[PASS] remove-lane no-op left project/${TMP_CHAIN}.json byte-identical"
 else
     fail=$((fail + 1))
     failures+=("remove-lane no-op byte-identical")
@@ -647,8 +668,8 @@ status=$?
 if [ $status -eq 0 ] &&
     echo "$out" | grep -q "removed lane $TMP_CHAIN -> $TMP_CHAIN_B" &&
     echo "$out" | grep -q "removed lane $TMP_CHAIN_B -> $TMP_CHAIN" &&
-    [ "$(jq -r ".lanes | has(\"$TMP_CHAIN_B\")" "$TMP_FILE")" = "false" ] &&
-    [ "$(jq -r ".lanes | has(\"$TMP_CHAIN\")" "$TMP_FILE_B")" = "false" ]; then
+    [ "$(jq -r ".lanes | has(\"$TMP_CHAIN_B\")" "$PROJECT_FILE")" = "false" ] &&
+    [ "$(jq -r ".lanes | has(\"$TMP_CHAIN\")" "$PROJECT_FILE_B")" = "false" ]; then
     pass=$((pass + 1))
     echo "[PASS] remove-lane BOTH=1 removes the lane AND its reciprocal"
 else
@@ -689,22 +710,24 @@ fi
 
 # 20. live zero-diff sync: with sync-check CLEAN (no value drift), `make sync` must be byte-identical
 #     to the committed file — this is the no-churn guarantee the canonical format exists for.
-if bash script/config/sync-check.sh ethereum-testnet-sepolia > /dev/null 2>&1; then
-    make sync CHAIN=ethereum-testnet-sepolia > /dev/null 2>&1
-    if git diff --exit-code --quiet -- config/chains/ethereum-testnet-sepolia.json; then
-        pass=$((pass + 1))
-        echo "[PASS] live sync on a CLEAN chain yields zero git diff (canonical format)"
+if live_enabled; then
+    if bash script/config/sync-check.sh ethereum-testnet-sepolia > /dev/null 2>&1; then
+        make sync CHAIN=ethereum-testnet-sepolia > /dev/null 2>&1
+        if git diff --exit-code --quiet -- config/chains/ethereum-testnet-sepolia.json; then
+            pass=$((pass + 1))
+            echo "[PASS] live sync on a CLEAN chain yields zero git diff (canonical format)"
+        else
+            fail=$((fail + 1))
+            failures+=("live sync zero-diff")
+            echo "[FAIL] live sync on a CLEAN chain produced a git diff:"
+            git diff -- config/chains/ethereum-testnet-sepolia.json | head -20 | sed 's/^/       | /'
+            git checkout -- config/chains/ethereum-testnet-sepolia.json 2> /dev/null
+        fi
     else
         fail=$((fail + 1))
-        failures+=("live sync zero-diff")
-        echo "[FAIL] live sync on a CLEAN chain produced a git diff:"
-        git diff -- config/chains/ethereum-testnet-sepolia.json | head -20 | sed 's/^/       | /'
-        git checkout -- config/chains/ethereum-testnet-sepolia.json 2> /dev/null
+        failures+=("live sync zero-diff (precheck)")
+        echo "[FAIL] live sync zero-diff: precheck sync-check ethereum-testnet-sepolia not CLEAN (drift or API down)"
     fi
-else
-    fail=$((fail + 1))
-    failures+=("live sync zero-diff (precheck)")
-    echo "[FAIL] live sync zero-diff: precheck sync-check ethereum-testnet-sepolia not CLEAN (drift or API down)"
 fi
 
 
@@ -739,8 +762,122 @@ else
     echo "[PASS] adopt-token on an unknown chain is refused with the add-chain hint"
 fi
 
+# ---------------------------------------------------------------- committed-tree gates (offline)
+#
+# The project store and the deploy ledger hold local, throwaway, sometimes secret-bearing state, so only
+# ONE curated example may ever be committed. These gates PROVE that from the actual git state (never by
+# reading .gitignore), and lint any committed project file for secret-shaped values.
+
+if offline_enabled; then
+    # H1. `git ls-files project/ history/` lists NO tracked file other than the committed example. Proved
+    #     from git itself: any scratch/local/real project file or any history file showing up here is a
+    #     hygiene breach. (Empty is fine — the example may be unstaged in a working tree.)
+    stray_tracked="$(git ls-files project/ history/ | grep -v '^project/ethereum-testnet-sepolia\.example\.json$' || true)"
+    if [ -z "$stray_tracked" ]; then
+        pass=$((pass + 1))
+        echo "[PASS] git ls-files project/ history/ tracks nothing but the committed example"
+    else
+        fail=$((fail + 1))
+        failures+=("committed-tree: stray tracked project/history file")
+        echo "[FAIL] committed-tree: these must NOT be tracked:"
+        echo "$stray_tracked" | sed 's/^/       | /'
+    fi
+
+    # H2. The ignore contract via `git check-ignore` (executes git's own ignore logic): scratch, local,
+    #     and real per-chain project files + the whole history/ ledger are ignored; ONLY the example is
+    #     trackable. `check-ignore -q` exits 0 when the path IS ignored.
+    ci_ok=1
+    for p in \
+        project/local-31337.json \
+        project/zz-scratch-tooling.json \
+        project/ethereum-testnet-sepolia.json \
+        "$PROJECT_FILE" \
+        history/tokens/ethereum-testnet-sepolia/1-BnM-T-Token.json \
+        config/chains/zz-scratch-tooling.json; do
+        git check-ignore -q "$p" || {
+            ci_ok=0
+            echo "       | NOT ignored but should be: $p"
+        }
+    done
+    if git check-ignore -q project/ethereum-testnet-sepolia.example.json; then
+        ci_ok=0
+        echo "       | the committed example must NOT be ignored (it is the one trackable project file)"
+    fi
+    if [ $ci_ok -eq 1 ]; then
+        pass=$((pass + 1))
+        echo "[PASS] gitignore contract: scratch/local/real project + history ignored, example trackable"
+    else
+        fail=$((fail + 1))
+        failures+=("committed-tree: gitignore contract")
+        echo "[FAIL] committed-tree: gitignore contract (see above)"
+    fi
+
+    # H3. Secret-shaped-value lint: a committed project file must carry only on-chain addresses and
+    #     selectorNames — never a URL (RPC/endpoint) or a 0x+64-hex private-key-shaped value. A 32-byte
+    #     base58 pubkey (43-44 high-entropy chars) is a legitimate non-EVM address and must NOT trip it.
+    secret_lint() { grep -EHn 'https?://|0x[0-9a-fA-F]{64}' "$@"; } # exit 0 == a secret-shaped value found
+    sl_fire_url="project/zz-scratch-secretlint-url.json"
+    sl_fire_key="project/zz-scratch-secretlint-key.json"
+    sl_clean_b58="project/zz-scratch-secretlint-b58.json"
+    printf '{"rpc":"https://mainnet.example/v3/DEADBEEFKEY","schema":3}' > "$sl_fire_url"
+    printf '{"k":"0x%064d","schema":3}' 1 > "$sl_fire_key"
+    printf '{"addresses":{"active":{"tokenPool":"ALh3xpZtujrfYZSiURBEHpeBFnzZEH37nY4BA4EHiiB5"}},"schema":3}' > "$sl_clean_b58"
+    sl_ok=1
+    secret_lint "$sl_fire_url" > /dev/null || { sl_ok=0; echo "       | FIRE test failed: a URL value was NOT flagged"; }
+    secret_lint "$sl_fire_key" > /dev/null || { sl_ok=0; echo "       | FIRE test failed: a 0x+64hex key was NOT flagged"; }
+    if secret_lint "$sl_clean_b58" > /dev/null; then
+        sl_ok=0
+        echo "       | FALSE-POSITIVE: a 32-byte base58 pubkey was flagged as a secret"
+    fi
+    if secret_lint project/ethereum-testnet-sepolia.example.json > /dev/null; then
+        sl_ok=0
+        echo "       | the committed example itself tripped the secret lint"
+    fi
+    rm -f "$sl_fire_url" "$sl_fire_key" "$sl_clean_b58"
+    if [ $sl_ok -eq 1 ]; then
+        pass=$((pass + 1))
+        echo "[PASS] secret-lint: fires on URL + 0x64hex, clean on a base58 pubkey and the example"
+    else
+        fail=$((fail + 1))
+        failures+=("committed-tree: secret-lint")
+        echo "[FAIL] committed-tree: secret-lint (see above)"
+    fi
+
+    # E1. Stale-string sweep: no relocated-store PATH reference survives anywhere in src+script — a
+    #     `script/deployments/<file>` read/write or an `addresses/<chainId>` path (the ledger + address
+    #     stores were relocated to history/ and project/). Clean break: no code acknowledges the old
+    #     layout at all, so any match is a real relocated-file reader and a FAIL.
+    stale_hits="$(grep -rnE 'script/deployments/[^ "`]|addresses/[0-9]' --include='*.sol' src script 2>/dev/null || true)"
+    if [ -z "$stale_hits" ]; then
+        pass=$((pass + 1))
+        echo "[PASS] stale-string sweep: no script/deployments/<file> or addresses/<chainId> path in src+script"
+    else
+        fail=$((fail + 1))
+        failures+=("stale-string sweep")
+        echo "[FAIL] stale-string sweep: relocated paths still referenced:"
+        echo "$stale_hits" | sed 's/^/       | /'
+    fi
+
+    # E2/H4. Config purity: a committed config/chains/*.json is pure API + chain facts — no `lanes`,
+    #        `roles`, or `ccipBnM` key (those live in the project store, not the config layer).
+    impure=""
+    for f in config/chains/*.json; do
+        case "$f" in *zz-scratch* | "$TMP_FILE" | "$TMP_FILE_B" | "$FUJI_FILE") continue ;; esac
+        [ -e "$f" ] || continue
+        jq -e 'has("lanes") or has("roles") or has("ccipBnM")' "$f" > /dev/null 2>&1 && impure="$impure $f"
+    done
+    if [ -z "$impure" ]; then
+        pass=$((pass + 1))
+        echo "[PASS] config purity: no lanes/roles/ccipBnM key in any committed config/chains/*.json"
+    else
+        fail=$((fail + 1))
+        failures+=("config purity")
+        echo "[FAIL] config purity: these configs still carry a project-state key:$impure"
+    fi
+fi
+
 echo ""
-echo "== test-tooling: $pass passed, $fail failed =="
+echo "== test-tooling ($PARTITION): $pass passed, $fail failed =="
 if [ $fail -ne 0 ]; then
     printf 'failed: %s\n' "${failures[@]}"
     exit 1

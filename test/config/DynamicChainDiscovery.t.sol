@@ -38,7 +38,6 @@ contract DynamicChainDiscoveryTest is Test {
                 '    "tokenAdminRegistry": "0x0000000000000000000000000000000000000005",\n',
                 '    "tokenPoolFactory": "0x0000000000000000000000000000000000000000"\n',
                 "  },\n",
-                '  "ccipBnM": "0x0000000000000000000000000000000000000000",\n',
                 '  "chainFamily": "evm",\n',
                 '  "chainId": "',
                 vm.toString(SCRATCH_CHAIN_ID),

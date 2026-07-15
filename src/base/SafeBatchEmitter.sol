@@ -9,7 +9,7 @@ import {CctActions} from "../actions/CctActions.sol";
 ///         exact shape the Safe{Wallet} UI's "Transaction Builder" app imports and `safe-cli` can
 ///         propose to the Safe Transaction Service. The emitted file carries the IDENTICAL `to`,
 ///         `value`, and `data` the EOA mode would broadcast, so reviewing the batch reviews the same
-///         calldata (`test/governance/SafeMode.t.sol` pins this byte-for-byte).
+///         calldata (`test/governance/SafeMode.t.sol` pins this equality).
 /// @dev The Safe UI wraps the listed `transactions` in a MultiSend on import, so the individual CALLs
 ///      are emitted, not the MultiSend wrapper. Values are decimal strings; data is 0x-hex. The JSON is
 ///      built entirely in Solidity via `vm` cheatcodes — no external tooling touches batch generation —

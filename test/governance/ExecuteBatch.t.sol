@@ -14,7 +14,7 @@ import {SafeBatchEmitter} from "../../src/base/SafeBatchEmitter.sol";
 import {SafeBatchLoader} from "../../src/base/SafeBatchLoader.sol";
 import {SafeMode} from "../../src/base/SafeMode.sol";
 
-/// @notice PR 3.1.1 proofs: composing independently emitted Safe batches into ONE meta-transaction.
+/// @notice Proofs for composing independently emitted Safe batches into ONE meta-transaction.
 ///         - The loader is the emitter's exact inverse (round-trip byte equality over the catalog).
 ///         - `loadMany` merges in the given order, and the merged calls equal the concatenation of
 ///           the per-operation builders — i.e. the calldata the EOA mode would broadcast.

@@ -1,15 +1,27 @@
-# Chain config schema (`config/chains/<selectorName>.json`)
+# Chain config and project-store schema
+
+> Owner: docs-cct-foundry maintainers · Last reviewed: 2026-07-15 · Applies to: the `project/` +
+> `history/` layout (schema 3).
+
+Per-chain state lives in **two files, both keyed by the canonical CCIP selectorName**:
+
+- **`config/chains/<selectorName>.json`** - pure API/chain facts (the `ccip{}` addresses, API-served
+  identity/metadata, three hand-authored keys, and the join keys). Git-tracked.
+- **`project/<selectorName>.json`** - the **project store**: three subtrees (`addresses{}`, `lanes{}`,
+  `roles{}`) plus `"schema": 3`. Gitignored in this template repo; a fork tracks it (see
+  [The project store](#the-project-store---projectselectornamejson)).
 
 This repo treats **CCIP chain metadata as DATA, not code**. Every chain selector, router, and CCIP
 infra address the scripts need is read from `config/chains/<selectorName>.json` at build/test time via
 `vm.parseJson*` (`src/config/ChainConfig.sol`). There are **no hardcoded selectors or CCIP addresses**
-in Solidity: `HelperConfig` discovers the chain list by scanning the directory (`vm.readDir`), so adding
-a chain - or updating a CCIP address - is a reviewed config edit with zero Solidity changes.
+in Solidity: `HelperConfig` discovers the chain list by scanning the `config/chains` directory
+(`vm.readDir`), so adding a chain - or updating a CCIP address - is a reviewed config edit with zero
+Solidity changes.
 
 The operational how-to (discover → add-chain → sync → doctor, and the "which command when" table) lives
 in the [README](../README.md#configuration); the `make`-command reference and the layered architecture
 (with diagrams) are in **[`config-architecture.md`](config-architecture.md)**. This document is the
-**field-by-field reference**.
+**field-by-field reference** for both files.
 
 ## The file name IS the canonical CCIP selectorName
 
@@ -28,110 +40,72 @@ too, whose `chainId` is a placeholder `"0"` the chainId guard cannot verify (see
 
 ## One writer per subtree
 
-The **git-tracked** `config/chains/<selectorName>.json` is a durable, versioned store; each part has a single
-writer so a git diff is an unambiguous audit log. (The `addresses/<chainId>.json` row below is a **separate,
-gitignored** file — its single-writer integrity comes from the deploy-time recorder, not from git history;
-see [its section](#the-deployed-address-registry---addresseschainidjson-schema-v2).)
+Each subtree of each file has a **single writer**, so a change is always attributable. In `config/chains`
+(git-tracked) that attribution is a git diff. In the project store it is the writing command; a fork that
+tracks `project/` gets a git diff there too (see [The project store](#the-project-store---projectselectornamejson)).
 
-| Subtree / field group                            | Owner                | Sole writer                                                   |
-| ------------------------------------------------ | -------------------- | ------------------------------------------------------------ |
-| `ccip{}` + the API-served identity/metadata fields (`displayName`, `chainFamily`, `environment`, `explorerUrl`, `nativeCurrencySymbol`) | the CCIP REST API | the **API sync** (`make add-chain` / `sync` / `sync-all`) - never by hand |
-| `lanes{}` (which remotes this pool connects to, at what outbound rate limits) | the token owner (policy) | **`make add-lane`** / **`make remove-lane`** or a reviewed hand edit - **never the API sync** |
-| `roles{}` (the privileged-authority surface: who holds token/pool/TAR/lockbox/hooks roles + optional `governance{}`) | the project's security owner (declared intent) | **`make snapshot-chain`** (backfill FROM chain) or a reviewed hand edit - **never the API sync**; `make roles-check` only READS it |
-| hand-authored keys the API serves nothing for (`chainNameIdentifier`, `rpcEnv`, `confirmations`, `ccipBnM`) | repo maintainers | a **reviewed hand edit** in a pull request |
-| immutable join keys (`name`, `chainSelector`, `chainId`) | the chain-selectors registry | seeded at `add-chain`, then **guard-validated** by the sync (never rewritten) |
-| `addresses/<chainId>.json` (separate, **gitignored**) | the deployer         | the **deploy scripts** — one `DeploymentRecorder` call → ledger + `RegistryWriter`, on `--broadcast` |
+| File            | Subtree / field group                                                                                                                   | Owner                                          | Sole writer                                                                                                            |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `config/chains` | `ccip{}` + the API-served identity/metadata fields (`displayName`, `chainFamily`, `environment`, `explorerUrl`, `nativeCurrencySymbol`) | the CCIP REST API                              | the **API sync** (`make add-chain` / `sync` / `sync-all`) - never by hand                                              |
+| `config/chains` | the three hand-authored keys the API serves nothing for (`chainNameIdentifier`, `rpcEnv`, `confirmations`)                              | repo maintainers                               | a **reviewed hand edit** in a pull request                                                                             |
+| `config/chains` | immutable join keys (`name`, `chainSelector`, `chainId`)                                                                                | the chain-selectors registry                   | seeded at `add-chain`, then **guard-validated** by the sync (never rewritten)                                          |
+| `project`       | `addresses{}` (the deployed-address registry sub-store)                                                                                 | the deployer                                   | the **deploy scripts** (one `DeploymentRecorder` call → `RegistryWriter`) and **`make adopt-token`**, on `--broadcast` |
+| `project`       | `lanes{}` (which remotes this pool connects to, at what outbound rate limits)                                                           | the token owner (policy)                       | **`make add-lane`** / **`make remove-lane`** or a reviewed hand edit - **never the API sync**                          |
+| `project`       | `roles{}` (the privileged-authority surface: who holds token/pool/TAR/lockbox/hooks roles + optional `governance{}`)                    | the project's security owner (declared intent) | **`make snapshot-chain`** (backfill FROM chain) or a reviewed hand edit; `make roles-check` only READS it              |
 
 The sync enforces this structurally: `SyncCcipConfig.run` writes **only** the API-served fields — the
 `.ccip` subtree (`vm.writeJson(json, path, ".ccip")`) plus the five identity/metadata keys the CCIP REST
-API serves (each a targeted `vm.writeJson(value, path, ".<key>")`) — so every hand-authored key
-(`chainNameIdentifier`, `rpcEnv`, `confirmations`, `ccipBnM`) and the `lanes{}` subtree are preserved
-untouched, and the join keys are validated, not overwritten. `make add-lane` mirrors the same discipline
-from the other side: it writes **only** the `.lanes` subtree (`vm.writeJson(lanes, path, ".lanes")`) and
-never touches an API-served field. **The rule of thumb: if a field exists on `GET /v2/chains/{selector}`,
-the sync sources it from the API; you never hand-type it. If a field is policy — which remotes, at what
-rate limits — the owner writes it, and the sync never will.** The same one-writer discipline governs the
-**`roles{}`** subtree (the privileged-authority surface): its sole writer is **`make snapshot-chain`**
-(`SnapshotChain.s.sol` → `vm.writeJson(roles, path, ".roles")`, preserve-and-replace on that subtree
-only), and `make roles-check` never writes — see [The `roles{}` subtree](#the-roles-subtree---declared-authority-not-api-fact)
-below and the operational runbook in [`docs/roles.md`](./roles.md).
+API serves (each a targeted `vm.writeJson(value, path, ".<key>")`) — so the three hand-authored keys
+(`chainNameIdentifier`, `rpcEnv`, `confirmations`) are preserved untouched and the join keys are validated,
+not overwritten. The sync **never touches the project store** at all. Each project-store writer mirrors the
+same discipline from its side: `make add-lane` writes **only** `.lanes` (`vm.writeJson(lanes, path, ".lanes")`),
+`RegistryWriter` writes **only** `.addresses`, and `make snapshot-chain` writes **only** `.roles`
+(`SnapshotChain.s.sol` → `vm.writeJson(roles, path, ".roles")`, preserve-and-replace on that subtree only) -
+each seeds the full skeleton first if the file is absent. **The rule of thumb: if a field exists on
+`GET /v2/chains/{selector}`, the sync sources it from the API; you never hand-type it. If a field is policy,
+authority, or a deployed address, the owning command writes it into the project store, and the sync never
+will.** See [The `roles{}` subtree](#the-roles-subtree---declared-authority-not-api-fact) below and the
+operational runbook in [`docs/roles.md`](./roles.md).
 
-## EVM chain file - every field
+## config/chains file - every field (pure API facts)
+
+`config/chains/<selectorName>.json` carries **only** chain facts: the API-synced `ccip{}` and
+identity/metadata, three hand-authored keys, and the join keys. Owner policy (`lanes{}`), authority
+(`roles{}`), and deployed addresses (`addresses{}`) are **not** here - they live in the project store (see
+[The project store](#the-project-store---projectselectornamejson)).
 
 Example (`config/chains/ethereum-testnet-sepolia.json`), grouped by writer:
 
 ```jsonc
 {
   // ── join keys (seeded at add-chain, then guard-validated by the sync; never rewritten) ───
-  "name": "ethereum-testnet-sepolia",      // canonical CCIP selectorName; == file basename; the CHAIN= arg
-  "chainId": "11155111",                   // native chain id, quoted STRING (see big-int note); "0" for non-EVM
+  "name": "ethereum-testnet-sepolia", // canonical CCIP selectorName; == file basename; the CHAIN= arg
+  "chainId": "11155111", // native chain id, quoted STRING (see big-int note); "0" for non-EVM
   "chainSelector": "16015286601757825753", // uint64 CCIP selector, quoted STRING; the primary join key
 
   // ── API-synced identity + metadata (sourced from GET /v2/chains/{selector}; never hand-edit) ──
-  "displayName": "Ethereum Sepolia",       // <- chain.displayName; human label for logs / output links
-  "chainFamily": "evm",                    // <- chain.chainFamily (lowercased); dispatches EVM vs non-EVM
-  "environment": "testnet",                // <- chain.environment ("testnet" | "mainnet")
+  "displayName": "Ethereum Sepolia", // <- chain.displayName; human label for logs / output links
+  "chainFamily": "evm", // <- chain.chainFamily (lowercased); dispatches EVM vs non-EVM
+  "environment": "testnet", // <- chain.environment ("testnet" | "mainnet")
   "explorerUrl": "https://sepolia.etherscan.io", // <- chainMetadata.explorer.url; output/verification links
-  "nativeCurrencySymbol": "ETH",           // <- chainMetadata.nativeCurrency.symbol; native gas-token symbol
+  "nativeCurrencySymbol": "ETH", // <- chainMetadata.nativeCurrency.symbol; native gas-token symbol
 
   // ── ccip{} : API-synced (overwritten by the sync; never hand-edit) ───────────
   "ccip": {
-    "router": "0x0BF3dE8c...",               // CCIP Router - entrypoint for ccipSend / offRamp
-    "rmnProxy": "0xba3f6251...",             // RMN (Risk Management Network) proxy / ARMProxy
-    "tokenAdminRegistry": "0x95F29FEE...",   // TokenAdminRegistry - maps token → its pool + admin
+    "router": "0x0BF3dE8c...", // CCIP Router - entrypoint for ccipSend / offRamp
+    "rmnProxy": "0xba3f6251...", // RMN (Risk Management Network) proxy / ARMProxy
+    "tokenAdminRegistry": "0x95F29FEE...", // TokenAdminRegistry - maps token → its pool + admin
     "registryModuleOwnerCustom": "0xa3c796d4...", // RegistryModuleOwnerCustom - claim-admin registry module
-    "feeQuoter": "0x8632C302...",            // FeeQuoter - quotes CCIP fees (reference)
-    "tokenPoolFactory": "0x2067C044...",     // TokenPoolFactory - deploys standard pools (reference)
-    "link": "0x779877A7...",                 // LINK token (the LINK fee token on this chain)
+    "feeQuoter": "0x8632C302...", // FeeQuoter - quotes CCIP fees (reference)
+    "tokenPoolFactory": "0x2067C044...", // TokenPoolFactory - deploys standard pools (reference)
+    "link": "0x779877A7...", // LINK token (the LINK fee token on this chain)
     "feeTokens": ["0xc4bF5CbD...", "0x779877A7...", "0x097D90c9..."] // accepted CCIP fee tokens (reference)
   },
 
-  // ── lanes{} : owner POLICY (written by make add-lane; NEVER touched by the API sync).
-  //    Ships empty ({}) - the entry below shows the shape one `make add-lane` produces ───────
-  "lanes": {
-    "ethereum-testnet-sepolia-mantle-1": { // keyed by the REMOTE chain's selectorName
-      "remoteSelector": "8236463271206331221",  // the remote's chainSelector (doctor-verified)
-      "capacity": "100000000000000000000000",   // outbound rate-limit bucket capacity, wei (quoted string)
-      "rate": "100000000000000000000",          // outbound rate-limit refill rate, wei/second (quoted string)
-      // ── optional blocks. ABSENT means undeclared (the doctor does not reconcile them);
-      //    a declared block with 0/0 means declared-DISABLED (the doctor asserts the bucket is off)
-      "inbound": {                              // inbound rate-limit policy (add-lane INBOUND_* args)
-        "capacity": "100000000000000000000000",
-        "rate": "100000000000000000000"
-      },
-      "v2": {                                   // 2.0.0-only lane surface (declared by hand edit)
-        "fastFinality": {                       // fast-finality (FTF) buckets, each direction optional
-          "outbound": { "capacity": "50000000000000000000000", "rate": "50000000000000000000" },
-          "inbound": { "capacity": "50000000000000000000000", "rate": "50000000000000000000" }
-        },
-        "feeConfig": {                          // per-lane token transfer fee override; each field optional
-          "destGasOverhead": "90000",           //   dest-chain execution gas overhead
-          "destBytesOverhead": "32",            //   data-availability bytes overhead
-          "finalityFeeUSDCents": "0",           //   default-finality fee, 0.01-USD units
-          "fastFinalityFeeUSDCents": "0",       //   fast-finality fee, 0.01-USD units
-          "finalityTransferFeeBps": "10",       //   default-finality bps fee [0-9999]
-          "fastFinalityTransferFeeBps": "25"    //   fast-finality bps fee [0-9999]
-        },
-        "ccv": {                                // per-lane CCV (Cross-Chain Verifier) requirements; each array optional
-          "outboundCCVs": ["0xCCV1..."],        //   base CCVs required for OUTBOUND messages to this remote
-          "thresholdOutboundCCVs": ["0xCCV2..."], //   extra outbound CCVs required at/above ccvThreshold (needs outboundCCVs)
-          "inboundCCVs": ["0xCCV1..."],         //   base CCVs required for INBOUND messages from this remote
-          "thresholdInboundCCVs": ["0xCCV2..."]   //   extra inbound CCVs required at/above ccvThreshold (needs inboundCCVs)
-        }
-      }
-    }
-  },
-
-  // ── chain-level CCV threshold : owner POLICY, pool-GLOBAL (declared by hand edit; sibling of lanes/ccip) ──
-  //    the additional-CCV threshold amount (wei, quoted decimal string). 0 / absent = no threshold declared.
-  //    NOT per-lane: one value on the pool's AdvancedPoolHooks governs every lane's threshold*CCVs arrays.
-  "ccvThreshold": "1000000000000000000000",
-
   // ── hand-authored (the API serves nothing for these; reviewed in a PR, preserved by sync) ──
   "chainNameIdentifier": "ETHEREUM_SEPOLIA", // UPPER_SNAKE env-var prefix: <ID>_RPC_URL, <ID>_TOKEN, <ID>_TOKEN_POOL
-  "rpcEnv": "ETHEREUM_SEPOLIA_RPC_URL",    // name of the env var holding this chain's RPC URL
-  "confirmations": 2,                      // block confirmations the scripts wait for (operator choice)
-  "ccipBnM": "0x9a97F119..."               // optional CCIP-BnM test token (0x0 / omitted when unused)
+  "rpcEnv": "ETHEREUM_SEPOLIA_RPC_URL", // name of the env var holding this chain's RPC URL
+  "confirmations": 2 // block confirmations the scripts wait for (operator choice)
 }
 ```
 
@@ -141,40 +115,31 @@ Example (`config/chains/ethereum-testnet-sepolia.json`), grouped by writer:
 **API sync (guard)** = seeded at `add-chain` then validated (not rewritten) every sync; **hand** = the
 API serves nothing for it, so a reviewed PR owns it and the sync preserves it verbatim.
 
-| Field                        | Type / format                    | Written by            | API source (if any)                            | Consumed by                                    |
-| ---------------------------- | -------------------------------- | --------------------- | ---------------------------------------------- | ---------------------------------------------- |
-| `name`                       | string (canonical selectorName)  | **API sync (guard)**  | `chain.name`                                   | file key + basename; validated by the sync     |
-| `chainId`                    | quoted decimal string (`"0"` non-EVM) | **API sync (guard)** | `chain.chainId` (EVM; `"0"` placeholder non-EVM) | `ChainConfig.chainId`; sync identity guard  |
-| `chainSelector`              | quoted `uint64` string           | **API sync (guard)**  | `chain.chainSelector`                          | `ChainConfig.load`; the primary join key       |
-| `displayName`                | string                           | **API sync**          | `chain.displayName`                            | `ChainConfig.load` → `chainName`; log output   |
-| `chainFamily`                | `"evm"` \| `"svm"`               | **API sync**          | `chain.chainFamily` (lowercased)               | `ChainConfig.load`; EVM/non-EVM dispatch       |
-| `environment`                | `"testnet"` \| `"mainnet"`       | **API sync**          | `chain.environment`                            | provenance                                     |
-| `explorerUrl`                | URL string                       | **API sync**          | `chainMetadata.explorer.url`                   | `ChainConfig.load`; output/verification links  |
-| `nativeCurrencySymbol`       | string                           | **API sync**          | `chainMetadata.nativeCurrency.symbol`          | `ChainConfig.load`                             |
-| `ccip.router`                | address                          | **API sync**          | `chainConfig.router` (active)                  | `ChainConfig.load` → `router`                  |
-| `ccip.rmnProxy`              | address                          | **API sync**          | `chainConfig.rmn` (active)                     | `ChainConfig.load` → `rmnProxy`                |
-| `ccip.tokenAdminRegistry`    | address                          | **API sync**          | `chainConfig.tokenAdminRegistry` (active)      | `ChainConfig.load`                             |
-| `ccip.registryModuleOwnerCustom` | address                      | **API sync**          | `chainConfig.registryModule` (active)          | `ChainConfig.load`                             |
-| `ccip.feeQuoter`             | address                          | **API sync**          | `chainConfig.feeQuoter` (active)               | reference (drift-checked)                      |
-| `ccip.tokenPoolFactory`      | address                          | **API sync**          | `chainConfig.tokenPoolFactory` (active)        | reference (drift-checked)                      |
-| `ccip.link`                  | address                          | **API sync**          | `chainConfig.feeTokens[symbol==LINK]`          | `ChainConfig.load` → `link`                    |
-| `ccip.feeTokens`             | address[]                        | **API sync**          | `chainConfig.feeTokens[].tokenAddress`         | reference (drift-checked)                      |
-| `lanes.<remote>`             | object, keyed by the remote's selectorName | **owner policy** (`make add-lane`) | — (policy, not an API fact)  | lane wiring; the doctor's mesh rung            |
-| `lanes.<remote>.remoteSelector` | quoted `uint64` string        | **owner policy** (`make add-lane`) | — (copied from the remote's config)   | doctor: must equal the remote's `chainSelector` |
-| `lanes.<remote>.capacity`    | quoted decimal string (wei)      | **owner policy** (`make add-lane`) | —                                      | outbound rate-limit bucket capacity            |
-| `lanes.<remote>.rate`        | quoted decimal string (wei/s)    | **owner policy** (`make add-lane`) | —                                      | outbound rate-limit refill rate                |
-| `lanes.<remote>.inbound`     | object `{capacity, rate}` (optional) | **owner policy** (`make add-lane INBOUND_*`) | —                        | inbound rate-limit policy; doctor lanes rung   |
-| `lanes.<remote>.v2`          | object (optional, 2.0.0 pools)   | **owner policy** (hand edit)       | —                                      | fast-finality buckets (`UpdateRateLimiters` FAST_FINALITY mode) + fee config (`UpdateTokenTransferFeeConfig`) + CCV config (`UpdateCCVConfig`); doctor lanes rung |
-| `lanes.<remote>.v2.ccv`      | object (optional, 2.0.0 pools w/ hooks) | **owner policy** (hand edit) | —                             | per-lane CCV requirements (`UpdateCCVConfig`); doctor lanes rung. Four optional address-string arrays below |
-| `lanes.<remote>.v2.ccv.outboundCCVs` | address[] string (optional) | **owner policy** (hand edit) | —                               | base CCVs required for outbound messages to the remote (`AdvancedPoolHooks.applyCCVConfigUpdates`) |
-| `lanes.<remote>.v2.ccv.thresholdOutboundCCVs` | address[] string (optional) | **owner policy** (hand edit) | —                    | extra outbound CCVs required at/above `ccvThreshold`; requires a non-empty `outboundCCVs` |
-| `lanes.<remote>.v2.ccv.inboundCCVs` | address[] string (optional) | **owner policy** (hand edit) | —                                | base CCVs required for inbound messages from the remote |
-| `lanes.<remote>.v2.ccv.thresholdInboundCCVs` | address[] string (optional) | **owner policy** (hand edit) | —                     | extra inbound CCVs required at/above `ccvThreshold`; requires a non-empty `inboundCCVs` |
-| `ccvThreshold`               | quoted decimal string (wei), chain-level | **owner policy** (hand edit) | —                          | pool-GLOBAL additional-CCV threshold (`AdvancedPoolHooks.setThresholdAmount`); 0/absent = undeclared; doctor lanes rung |
-| `chainNameIdentifier`        | UPPER_SNAKE string               | hand                  | — (not in the API)                             | `ChainConfig.load`; the `<ID>_*` env prefix    |
-| `rpcEnv`                     | env-var name string              | hand                  | — (not in the API)                             | fork setup; the doctor's RPC rung              |
-| `confirmations`              | number                           | hand                  | — (`chainConfig.finality`/`blockTime` are `null`) | `ChainConfig.load`                          |
-| `ccipBnM`                    | address (`0x0` / omitted = none) | hand                  | — (no authoritative CCIP token API)            | `ChainConfig.load`                             |
+| Field                            | Type / format                         | Written by           | API source (if any)                               | Consumed by                                   |
+| -------------------------------- | ------------------------------------- | -------------------- | ------------------------------------------------- | --------------------------------------------- |
+| `name`                           | string (canonical selectorName)       | **API sync (guard)** | `chain.name`                                      | file key + basename; validated by the sync    |
+| `chainId`                        | quoted decimal string (`"0"` non-EVM) | **API sync (guard)** | `chain.chainId` (EVM; `"0"` placeholder non-EVM)  | `ChainConfig.chainId`; sync identity guard    |
+| `chainSelector`                  | quoted `uint64` string                | **API sync (guard)** | `chain.chainSelector`                             | `ChainConfig.load`; the primary join key      |
+| `displayName`                    | string                                | **API sync**         | `chain.displayName`                               | `ChainConfig.load` → `chainName`; log output  |
+| `chainFamily`                    | `"evm"` \| `"svm"`                    | **API sync**         | `chain.chainFamily` (lowercased)                  | `ChainConfig.load`; EVM/non-EVM dispatch      |
+| `environment`                    | `"testnet"` \| `"mainnet"`            | **API sync**         | `chain.environment`                               | provenance                                    |
+| `explorerUrl`                    | URL string                            | **API sync**         | `chainMetadata.explorer.url`                      | `ChainConfig.load`; output/verification links |
+| `nativeCurrencySymbol`           | string                                | **API sync**         | `chainMetadata.nativeCurrency.symbol`             | `ChainConfig.load`                            |
+| `ccip.router`                    | address                               | **API sync**         | `chainConfig.router` (active)                     | `ChainConfig.load` → `router`                 |
+| `ccip.rmnProxy`                  | address                               | **API sync**         | `chainConfig.rmn` (active)                        | `ChainConfig.load` → `rmnProxy`               |
+| `ccip.tokenAdminRegistry`        | address                               | **API sync**         | `chainConfig.tokenAdminRegistry` (active)         | `ChainConfig.load`                            |
+| `ccip.registryModuleOwnerCustom` | address                               | **API sync**         | `chainConfig.registryModule` (active)             | `ChainConfig.load`                            |
+| `ccip.feeQuoter`                 | address                               | **API sync**         | `chainConfig.feeQuoter` (active)                  | reference (drift-checked)                     |
+| `ccip.tokenPoolFactory`          | address                               | **API sync**         | `chainConfig.tokenPoolFactory` (active)           | reference (drift-checked)                     |
+| `ccip.link`                      | address                               | **API sync**         | `chainConfig.feeTokens[symbol==LINK]`             | `ChainConfig.load` → `link`                   |
+| `ccip.feeTokens`                 | address[]                             | **API sync**         | `chainConfig.feeTokens[].tokenAddress`            | reference (drift-checked)                     |
+| `chainNameIdentifier`            | UPPER_SNAKE string                    | hand                 | — (not in the API)                                | `ChainConfig.load`; the `<ID>_*` env prefix   |
+| `rpcEnv`                         | env-var name string                   | hand                 | — (not in the API)                                | fork setup; the doctor's RPC rung             |
+| `confirmations`                  | number                                | hand                 | — (`chainConfig.finality`/`blockTime` are `null`) | `ChainConfig.load`                            |
+
+The `lanes.<remote>` field rows (`remoteSelector`, `capacity`, `rate`, `inbound`, the `v2` blocks, and the
+chain-level `ccvThreshold`) moved with the subtree to the project store - see
+[The `lanes{}` subtree](#the-lanes-subtree---owner-policy-not-api-fact).
 
 > **`chainNameIdentifier`/`rpcEnv` are DERIVED for newly added chains.** `make add-chain` seeds
 > `chainNameIdentifier` as UPPER_SNAKE of the selectorName (e.g. `avalanche-testnet-fuji` →
@@ -192,6 +157,98 @@ API serves nothing for it, so a reviewed PR owns it and the sync preserves it ve
 > **Targeted key reads, not whole-struct decode.** `ChainConfig` reads by path (`.ccip.router`,
 > `.chainSelector`, …), so it is order-independent and robust to the alphabetical key reordering that
 > `vm.writeJson` and the canonical `jq --indent 2 -S` format perform.
+
+## The project store - `project/<selectorName>.json`
+
+The project store holds all per-chain state this repo owns, in three subtrees plus a version field, with
+**one writer each**:
+
+```jsonc
+{
+  "addresses": { "active": {}, "deployments": {} },
+  "lanes": {},
+  "roles": {},
+  "schema": 3
+}
+```
+
+That skeleton is what every writer seeds when it first touches a chain (a user's first touch is often
+`make add-lane` or `make snapshot-chain`, not a deploy), so no command hits a raw `vm.writeJson`-on-missing
+cheatcode revert. `"schema": 3` is the version integer future migrations dispatch on. The file is keyed by
+the canonical **selectorName** (the `config/chains` basename), so two non-EVM chains that both report
+`chainId "0"` never collide - each resolves to its own `project/<selectorName>.json`, and no `project/0.json`
+is ever created.
+
+**Tracking.** This template repo **gitignores `project/`** - it ships no real deployment addresses, only the
+concrete example `project/ethereum-testnet-sepolia.example.json`. A downstream **fork should un-gitignore
+`project/`** so its lanes, roles, and addresses become one reviewed, git-versioned, team-shared source of
+truth: track public data only (addresses + reviewed policy and authority), **never secrets** (a lint FAILs a
+secret-shaped value). See [`deployed-addresses.md`](deployed-addresses.md#tracking-rule-template-vs-fork).
+
+**Reserved namespace.** Subdirectories of `project/` are reserved for token groups (one directory per
+token group, each holding its own per-chain files) - do not place files under `project/<subdir>/`.
+
+**Canonical form (differs from `config/chains`).** Each store has its own on-disk canonical, and the writers
+emit it directly so a no-op re-write is a zero-diff even on the direct `forge script` path (no `make`):
+
+| Store                  | Canonical form                                                                                            | Emitted by                                                            |
+| ---------------------- | --------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| `project/*.json`       | sorted keys at every level, 2-space indent, **NO trailing newline** (forge `vm.writeJson`'s exact output) | the Solidity writers (`RegistryWriter`, `add-lane`, `snapshot-chain`) |
+| `config/chains/*.json` | sorted keys, 2-space indent, **trailing newline** (`jq --indent 2 -S`)                                    | the sync + `jq` canonicalize step                                     |
+
+`make fmt-config` repairs **both** stores to their respective canonical (`project/*.json` without the
+trailing newline, `config/chains/*.json` with it). It is a **repair tool only**, never a required step - a
+direct-forge run is already canonical. A golden test pins `project/` writer output against
+`jq --indent 2 -S` (newline-normalized) so a future Foundry formatter change fails CI visibly.
+
+### The `addresses{}` sub-store (the registry)
+
+`addresses{}` is the deployed-address **registry**: the current-state, machine-read store that
+`HelperConfig` resolution, the redeploy guard, and the doctor read back. (The word "registry" is reserved
+for this subtree; the whole file is the "project store".) Its sole writers are the deploy recorder and
+`make adopt-token`, both through `RegistryWriter`, which writes `.addresses` only. Values are **strings**:
+EVM hex on EVM chains, base58 on non-EVM chains, family-validated on write against the chain's
+`config/chains/<selectorName>.json` `.chainFamily`.
+
+```jsonc
+"addresses": {
+  "active": {                       // <- what HelperConfig resolves (zero-export)
+    "token":     "0xToken",         //    EVM hex here; a base58 string on a non-EVM chain
+    "tokenPool": "0xPoolV2",        //    most-recently-deployed pool for the chain
+    "lockBox":   "0xLockBox",
+    "poolHooks": "0xHooks"
+  },
+  "deployments": {                  // <- uniquely named per artifact (type + version in the key)
+    "BnM-T_Token":                   "0xToken",
+    "BnM-T_BurnMintTokenPool_2.0.0": "0xPoolV2",   // key carries the pool type + version
+    "BnM-T_LockBox":                 "0xLockBox",
+    "BnM-T_BurnMint_PoolHooks":      "0xHooks"
+  }
+}
+```
+
+- **`active.<role>`** is the single slot `HelperConfig` resolves for each of the four roles
+  (`token`/`tokenPool`/`lockBox`/`poolHooks`) - the zero-export default. `read(selectorName, role)` resolves
+  `.addresses.active.<role>`. Environment variables still override the registry (see the
+  [README](../README.md#project-store--projectselectornamejson-the-default) precedence ladder), as
+  **read-only** inputs: an env-driven run resolves the override but never writes the store.
+  > **`active` is what this repo last deployed - NOT proof of what is wired.** The on-chain
+  > **TokenAdminRegistry** (`getPool(token)`) is the authority for the pool CCIP actually routes through.
+  > They legitimately diverge whenever the wired pool was changed out-of-band (e.g. a `setPool` cut from a
+  > Safe). `make doctor` reads the TAR and reports any divergence as a **WARN** (never a FAIL).
+  > **Single-valued limit:** `active.<role>` holds exactly one address per role. Deploy two pools for the
+  > same symbol on one chain and `active.tokenPool` points at the LAST one deployed; the zero-export getters
+  > then resolve that same last pool for both tokens. To address a specific earlier artifact, pass it
+  > explicitly via env or read its `deployments.<name>` entry. `make doctor` surfaces the ambiguity: when
+  > `deployments{}` holds more than one token pool, the registry rung WARNs and names the
+  > `{CHAIN}_TOKEN_POOL` targeted override.
+- **`deployments.<name>`** is the uniquely-named archive: the key carries the pool's **type and version**, so
+  distinct artifacts never collide or clobber each other in storage. This is a **storage** property, not a
+  resolution one - the zero-export ladder resolves only `active`, which is single-valued (above).
+
+Per-artifact keys and the redeploy guard are the reference of
+[`deployed-addresses.md`](deployed-addresses.md); the resolution precedence is in the
+[README](../README.md#project-store--projectselectornamejson-the-default).
 
 ### The `lanes{}` subtree - owner policy, not API fact
 
@@ -217,9 +274,9 @@ on a 2.0.0 pool applies the declared `v2.fastFinality` bucket(s) whenever the ra
 unset for a direction, `UpdateTokenTransferFeeConfig` resolves every fee field the same way from
 `v2.feeConfig` (env var > declared field > current on-chain value), and `UpdateCCVConfig` resolves
 every CCV array the same way from `v2.ccv` - the same env-over-lanes ladder `ApplyChainUpdates` uses for
-the core fields. The semantics are strict: an **absent** block or field is *undeclared* - the doctor
+the core fields. The semantics are strict: an **absent** block or field is _undeclared_ - the doctor
 does not reconcile it and the apply scripts fall through to their historical defaults; a **declared**
-bucket with `0`/`0` is *declared-disabled* and the doctor asserts the live bucket is off. `add-lane`
+bucket with `0`/`0` is _declared-disabled_ and the doctor asserts the live bucket is off. `add-lane`
 preserves every block verbatim when it rewrites the `lanes` subtree to append another lane.
 
 **The `v2.ccv` block and the chain-level `ccvThreshold`.** CCVs (Cross-Chain Verifiers) live on the
@@ -227,8 +284,8 @@ pool's `AdvancedPoolHooks` contract (`TokenPool(pool).getAdvancedPoolHooks()`), 
 2.0.0 pool **with hooks wired** - a declared `v2.ccv` on a pre-2.0.0 pool, or a 2.0.0 pool with no
 hooks, WARNs in the doctor and refuses by name in `UpdateCCVConfig` (wire hooks first:
 `updateAdvancedPoolHooks` / `DeployAdvancedPoolHooks`). `v2.ccv` carries four **optional** address-string
-arrays, each declared-only-if-present (an absent array is *undeclared* and is never reconciled; a present
-empty array `[]` is *declared-empty*): `outboundCCVs` and `inboundCCVs` are the base verifier sets
+arrays, each declared-only-if-present (an absent array is _undeclared_ and is never reconciled; a present
+empty array `[]` is _declared-empty_): `outboundCCVs` and `inboundCCVs` are the base verifier sets
 required for every message in that direction, and `thresholdOutboundCCVs` / `thresholdInboundCCVs` are the
 extra verifiers required only at or above the threshold amount. The on-chain rules are enforced by both
 the setter and the hooks contract: a non-empty `threshold*CCVs` list **requires** a non-empty base list in
@@ -268,10 +325,11 @@ live drift can be a deliberate emergency throttle.
 
 `roles{}` declares **who holds every privileged role** across the token, its pool, the
 TokenAdminRegistry, and (when present) the lockbox and hooks - the authority surface a security owner
-intends. It is the durable, git-versioned record of "who controls this deployment," reconciled against
-the live chain by `make roles-check` and `make doctor`'s roles rung. Its sole writer is **`make
-snapshot-chain CHAIN=<name>`** (backfill FROM chain, preserve-and-replace on the `.roles` subtree only,
-the same discipline as `.ccip`/`.lanes`); the API sync never touches it, and `roles-check` only reads
+intends. It is the durable, reviewed record of "who controls this deployment" (git-versioned once a fork
+tracks `project/`), reconciled against the live chain by `make roles-check` and `make doctor`'s roles rung.
+Its sole writer is **`make snapshot-chain CHAIN=<name>`** (backfill FROM chain, preserve-and-replace on the
+`.roles` subtree only, the same discipline as `.addresses`/`.lanes`); the API sync never touches it, and
+`roles-check` only reads
 it. The full operational model - declared-intent vs live, the read-only-vs-writer split, the
 drift-response decision tree, and the honest-coverage caveat - lives in [`docs/roles.md`](./roles.md);
 this section is the field reference.
@@ -287,18 +345,20 @@ the auditor WARNs so a partial list is never read as full.
 The token block **dispatches on a declared `type`**, because the admin model differs per template - the
 engine never assumes one:
 
-| `type`       | Template                    | Top-level admin field(s)                         | Notes                                                                 |
-| ------------ | --------------------------- | ------------------------------------------------ | --------------------------------------------------------------------- |
-| `crosschain` | `CrossChainToken`           | `defaultAdmin` (+ `pendingDefaultAdmin`)         | OZ `AccessControlDefaultAdminRules`; single-holder, two-step transfer. Has the separate `burnMintRoleAdmins` list (the `BURN_MINT_ADMIN_ROLE` that admins mint/burn - a slot a naive sweep forgets). |
-| `burnmint`   | `BurnMintERC20`             | `defaultAdmins` (list)                           | plain OZ `AccessControl`; multi-holder `DEFAULT_ADMIN_ROLE` admins mint/burn directly. |
-| `factory`    | `FactoryBurnMintERC20`      | `owner`                                          | `Ownable`; enumerable `getMinters()`/`getBurners()` sets.             |
-| `byo`        | unknown / externally deployed | whichever of `owner` / `defaultAdmins` answers | only the universal admin-registration points are probed; every other token-internal list stays `complete:false` (a clean check does NOT prove a BYO token's mint/burn rights are safe). |
+| `type`       | Template                      | Top-level admin field(s)                       | Notes                                                                                                                                                                                                |
+| ------------ | ----------------------------- | ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `crosschain` | `CrossChainToken`             | `defaultAdmin` (+ `pendingDefaultAdmin`)       | OZ `AccessControlDefaultAdminRules`; single-holder, two-step transfer. Has the separate `burnMintRoleAdmins` list (the `BURN_MINT_ADMIN_ROLE` that admins mint/burn - a slot a naive sweep forgets). |
+| `burnmint`   | `BurnMintERC20`               | `defaultAdmins` (list)                         | plain OZ `AccessControl`; multi-holder `DEFAULT_ADMIN_ROLE` admins mint/burn directly.                                                                                                               |
+| `factory`    | `FactoryBurnMintERC20`        | `owner`                                        | `Ownable`; enumerable `getMinters()`/`getBurners()` sets.                                                                                                                                            |
+| `byo`        | unknown / externally deployed | whichever of `owner` / `defaultAdmins` answers | only the universal admin-registration points are probed; every other token-internal list stays `complete:false` (a clean check does NOT prove a BYO token's mint/burn rights are safe).              |
 
 ```jsonc
 "roles": {
   // ── token authority (template-dispatched on `type`) ──────────────────────────
   "token": {
-    "address": "0xa1f7882a...",             // the token this block describes (the snapshot/audit anchor)
+    "address": "0xa1f7882a...",             // the token this block describes (the snapshot/audit anchor;
+                                             // make doctor WARNs when it diverges from addresses.active.token
+                                             // - re-anchor after a repoint with make snapshot-chain)
     "type": "crosschain",                    // crosschain | burnmint | factory | byo — selects the admin model
     "ccipAdmin": "0xGov...",                 // getCCIPAdmin() — the TAR registration authority (one-step, owner-gated)
     "defaultAdmin": "0xGov...",              // crosschain only: defaultAdmin() (single-holder, two-step)
@@ -390,10 +450,27 @@ source). `config/chains/solana-devnet.json` keeps the same shape but:
   identity; the sync/doctor selectorName guard is what protects a non-EVM file from a wrong selector.
 - The `ccip{}` block is **all-zero** and `feeTokens` is empty: non-EVM chains have no EVM-shaped
   `chainConfig`, so they are excluded from the API **address** sync (the sync SKIPs the `ccip{}`
-  transform cleanly, and `ccipBnM` stays `0x0`).
-- There is **no `lanes{}`**: lanes are outbound policy, and non-EVM chains are destination-only here -
-  an EVM chain may declare a lane **to** `solana-devnet` (exempt from the doctor's reciprocity rung),
-  but `make add-lane LOCAL=solana-devnet ...` is refused (no lanes object to write into).
+  transform cleanly).
+- The non-EVM chain's own **project store** carries **no `lanes{}`**: lanes are outbound policy, and
+  non-EVM chains are destination-only here - an EVM chain may declare a lane **to** `solana-devnet` (exempt
+  from the doctor's reciprocity rung), but `make add-lane LOCAL=solana-devnet ...` is refused (no lanes to
+  write). Its `addresses{}` subtree DOES apply, holding the Solana token/pool as **base58 strings** (see
+  below).
+- **A non-EVM token/pool is stored as base58 and feeds `applyChainUpdates` from the store.** Adopt it with
+  `make adopt-token CHAIN=<solana-chain> TOKEN_B58=<base58> [POOL_B58=<base58>]` (the `runNonEvm` path),
+  which family-validates each value (base58 decodes to exactly 32 bytes) and writes
+  `project/<solana-chain>.json` `addresses{}`. An EVM source then reads those remote bytes from the store
+  through the selectorName-keyed getters when it lists Solana as a remote in `applyChainUpdates`, replacing
+  the old env-only path. Two non-EVM chains that both report `chainId "0"` never collide, because the store
+  is keyed by selectorName.
+- **The base58 validation is syntactic only — sanity-check the accounts before wiring the lane.** `POOL_B58`
+  must be the Solana pool's **config account** (the state PDA the OnRamp stamps as `sourcePoolAddress`), not
+  the pool program id or the token mint; `TOKEN_B58` is the mint. Once the Solana side is deployed, stock
+  CLIs confirm both (advisory — the accounts do not exist pre-deploy, so `AccountNotFound` is expected then):
+  `solana account <POOL_B58> --url <cluster> --output json` must show the account exists, `executable:false`,
+  and `owner` = the CCIP pool program id (a signer PDA returns `AccountNotFound`; a program id shows
+  `executable:true`; a mint shows a token-program owner); `spl-token display <TOKEN_B58> --url <cluster>`
+  must report an SPL/Token-2022 mint.
 - **The chain-level identity + metadata ARE served for non-EVM and ARE synced.** `GET /v2/chains/{selector}`
   returns `chainMetadata{explorer,nativeCurrency}` for every family, so `displayName`, `chainFamily`,
   `environment`, `explorerUrl`, and `nativeCurrencySymbol` are sourced/refreshed from the API on Solana too
@@ -402,84 +479,38 @@ source). `config/chains/solana-devnet.json` keeps the same shape but:
 
 ```jsonc
 {
-  "name": "solana-devnet",                 // canonical selectorName (already canonical; unchanged)
-  "displayName": "Solana Devnet",          // <- chain.displayName (API-synced)
-  "chainNameIdentifier": "SOLANA_DEVNET",  // hand
-  "chainFamily": "svm",                    // <- chain.chainFamily (API-synced)
-  "environment": "testnet",                // <- chain.environment (API-synced)
-  "chainId": "0",                          // placeholder - non-EVM; selectorName is the portable identity
+  "name": "solana-devnet", // canonical selectorName (already canonical; unchanged)
+  "displayName": "Solana Devnet", // <- chain.displayName (API-synced)
+  "chainNameIdentifier": "SOLANA_DEVNET", // hand
+  "chainFamily": "svm", // <- chain.chainFamily (API-synced)
+  "environment": "testnet", // <- chain.environment (API-synced)
+  "chainId": "0", // placeholder - non-EVM; selectorName is the portable identity
   "chainSelector": "16423721717087811551",
-  "rpcEnv": "SOLANA_DEVNET_RPC_URL",       // hand
-  "ccip": { "router": "0x00...00", "rmnProxy": "0x00...00", "tokenAdminRegistry": "0x00...00",
-            "registryModuleOwnerCustom": "0x00...00", "feeQuoter": "0x00...00",
-            "tokenPoolFactory": "0x00...00", "link": "0x00...00", "feeTokens": [] },
-  "confirmations": 0,                      // hand (operator choice)
-  "explorerUrl": "https://explorer.solana.com?cluster=devnet", // <- chainMetadata.explorer.url (API-synced)
-  "nativeCurrencySymbol": "SOL",           // <- chainMetadata.nativeCurrency.symbol (API-synced)
-  "ccipBnM": "0x00...00"                    // hand (optional)
-}
-```
-
-## The deployed-address registry - `addresses/<chainId>.json` (schema v2)
-
-A complementary, separate store, keyed by numeric `chainId` (not selectorName), user-specific and
-**gitignored** (only the committed `addresses/11155111.example.json` shows the shape). Unlike the git-tracked
-`config/chains/*.json` above, a per-chain registry file is **local to the machine that ran the deploy** - a
-fresh clone or a CI job has none. It is governed by the deploy scripts alone; the API sync never touches it.
-
-### Two sub-stores: `active` role pointers + named `deployments`
-
-```jsonc
-{
-  "active": {                       // <- what HelperConfig resolves (zero-export)
-    "token":     "0xToken",
-    "tokenPool": "0xPoolV2",        // most-recently-deployed pool for the chain
-    "lockBox":   "0xLockBox",
-    "poolHooks": "0xHooks"
+  "rpcEnv": "SOLANA_DEVNET_RPC_URL", // hand
+  "ccip": {
+    "router": "0x00...00",
+    "rmnProxy": "0x00...00",
+    "tokenAdminRegistry": "0x00...00",
+    "registryModuleOwnerCustom": "0x00...00",
+    "feeQuoter": "0x00...00",
+    "tokenPoolFactory": "0x00...00",
+    "link": "0x00...00",
+    "feeTokens": []
   },
-  "deployments": {                  // <- uniquely named per artifact (type + version in the key)
-    "BnM-T_Token":                   "0xToken",
-    "BnM-T_BurnMintTokenPool_2.0.0": "0xPoolV2",   // key carries the pool type + version
-    "BnM-T_LockBox":                 "0xLockBox",
-    "BnM-T_BurnMint_PoolHooks":      "0xHooks"
-  }
+  "confirmations": 0, // hand (operator choice)
+  "explorerUrl": "https://explorer.solana.com?cluster=devnet", // <- chainMetadata.explorer.url (API-synced)
+  "nativeCurrencySymbol": "SOL" // <- chainMetadata.nativeCurrency.symbol (API-synced)
 }
 ```
 
-- **`active.<role>`** is the single slot `HelperConfig` resolves for each of the four roles
-  (`token`/`tokenPool`/`lockBox`/`poolHooks`) - the zero-export default. `read(chainId, role)` resolves
-  `.active.<role>`, with a legacy fallback to a flat pre-v2 top-level `.<role>` so any older local file keeps
-  working. Environment variables still override the registry (see the [README](../README.md#deployed-address-registry--addresseschainidjson-the-default) precedence ladder).
-  > **`active` is what this repo last deployed - NOT proof of what is wired.** The on-chain
-  > **TokenAdminRegistry** (`getPool(token)`) is the authority for the pool CCIP actually routes through.
-  > They legitimately diverge whenever the wired pool was changed out-of-band (e.g. a `setPool` cut from a
-  > Safe). `make doctor` reads the TAR and reports any divergence as a **WARN** (never a FAIL).
-  > **Single-valued limit:** `active.<role>` holds exactly one address per role. Deploy two pools for the
-  > same symbol on one chain and `active.tokenPool` points at the LAST one deployed; the zero-export getters
-  > (`getDeployedTokenPool`/`LockBox`/`PoolHooks` read only `active`) then resolve that same last pool for
-  > both tokens. To address a specific earlier artifact, pass it explicitly via env or read its
-  > `deployments.<name>` entry.
-- **`deployments.<name>`** is the uniquely-named archive: the key carries the pool's **type and version**, so
-  distinct artifacts never collide or clobber each other in storage. Note this is a **storage** property, not
-  a resolution one - the zero-export ladder resolves only `active`, which is single-valued (above).
+The Solana deployed addresses live in `project/solana-devnet.json` `addresses{}` as base58 strings, not in
+this file.
 
-### Per-artifact keying
+## Related
 
-| Artifact    | `deployments` key                         | `active` role | Why |
-| ----------- | ----------------------------------------- | ------------- | --- |
-| `token`     | `{symbol}_Token`                          | `token`       | one token per symbol |
-| `tokenPool` | `{symbol}_{poolType}TokenPool_{version}`  | `tokenPool`   | type + version in the key so artifacts never collide |
-| `lockBox`   | `{symbol}_LockBox`                        | `lockBox`     | one lockbox per lock-release token |
-| `poolHooks` | `{symbol}_{poolType}_PoolHooks`           | `poolHooks`   | hooks belong to a pool, not a chain |
-
-### One writer per artifact (the recorder)
-
-Each deploy script makes **one** call to `script/utils/DeploymentRecorder.s.sol` per artifact. That single
-call (a) emits the detailed timestamped ledger file via `DeploymentUtils.save*` (format unchanged) **and**
-(b) upserts `deployments[name]` + `active[role]` via `RegistryWriter` - the two stores can no longer drift,
-because one writer owns both. The redeploy guard keys on the unique `deployments` name: re-deploying the
-*same* name is refused unless `FORCE_REDEPLOY=true` (which drops the stale entry and clears its `active`
-pointer, then records the replacement), while a new *version* deploys freely. The registry is the **only**
-address store read back (by `HelperConfig` resolution and the guard); the `script/deployments/**` ledger is
-write-only history. Resolution precedence and the guard are documented in the
-[README](../README.md#deployed-address-registry--addresseschainidjson-the-default).
+- [`deployed-addresses.md`](deployed-addresses.md) - the deployed-address loop (writers, overrides,
+  reconcile, warns), the per-artifact keying table, the redeploy guard, and the template-vs-fork tracking
+  rule.
+- [`roles.md`](roles.md) - the `roles{}` operational runbook.
+- [`config-architecture.md`](config-architecture.md) - the `make`-command reference and the layered store
+  diagrams.

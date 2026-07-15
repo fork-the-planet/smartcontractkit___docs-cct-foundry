@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # roles-check.sh [chain ...] — READ-ONLY authority reconcile wrapper around RolesCheck.run(string).
 #
-# With no args, checks every EVM config/chains/*.json that DECLARES a roles{} block (chains without
-# one are listed as SKIP — bootstrap them with `make snapshot-chain CHAIN=<name>`). Classifies the
+# With no args, checks every EVM chain whose project store (project/<name>.json) DECLARES a roles{}
+# block (chains without one are listed as SKIP — bootstrap them with `make snapshot-chain CHAIN=<name>`).
+# Chain family comes from config/chains; the declared roles{} lives in the project store. Classifies the
 # forge output into the CI-ready exit-code contract (the contract belongs to THIS SCRIPT — GNU make
 # remaps any recipe failure to exit 2, so `make roles-check` is pass/fail only; CI calls the script
 # directly, the same lesson as sync-check.sh):
@@ -27,7 +28,7 @@ if [ ${#chains[@]} -eq 0 ]; then
             echo ">> roles-check $name: SKIP (non-EVM)"
             continue
         fi
-        if [ "$(jq 'has("roles")' "$f")" != "true" ]; then
+        if [ ! -f "project/$name.json" ] || [ "$(jq -r '(.roles // {}) | has("token")' "project/$name.json" 2>/dev/null)" != "true" ]; then
             echo ">> roles-check $name: SKIP (no roles{} declared - make snapshot-chain CHAIN=$name)"
             continue
         fi

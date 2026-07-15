@@ -4,35 +4,46 @@ pragma solidity 0.8.24;
 import {Vm, VmSafe} from "forge-std/Vm.sol";
 import {console} from "forge-std/console.sol";
 
+import {ProjectStore} from "./ProjectStore.sol";
+import {ChainHandlers} from "../../script/utils/ChainHandlers.s.sol";
+
 /// @title RegistryWriter
-/// @notice The deployed-address registry: deploy scripts record their outputs in
-/// `addresses/<chainId>.json`, one file per chain, so a fresh deployment is immediately resolvable
-/// by every later script with no `export` step — the registry survives the terminal session that
-/// shell exports vanish with. Environment variables (`TOKEN`, `{CHAIN}_TOKEN`, ...) keep working and
-/// always take priority over the registry.
+/// @notice The deployed-address registry: the `addresses{}` sub-store of
+/// `project/<selectorName>.json`. Deploy scripts record their outputs here — one project file per
+/// chain, keyed by the canonical CCIP **selectorName** (identical to `config/chains/<selectorName>.json`)
+/// — so a fresh deployment is immediately resolvable by every later script with no `export` step: the
+/// store survives the terminal session that shell exports vanish with. Environment variables (`TOKEN`,
+/// `{CHAIN}_TOKEN`, ...) keep working and always take priority over the store (an env-driven run is
+/// READ-ONLY — it never writes back; the divergence notice names the reconcile command instead).
 ///
-/// @dev **Schema v2 — `active` role pointers + named `deployments` entries.**
+/// @dev **Schema 3 — `active` role pointers + named `deployments` entries, both STRING-valued.**
 /// ```jsonc
+/// // project/<selectorName>.json
 /// {
-///   "active": {                        // what HelperConfig resolves (zero-export)
-///     "token": "0x..", "tokenPool": "0x..", "lockBox": "0x..", "poolHooks": "0x.."
+///   "addresses": {
+///     "active": {                        // what HelperConfig resolves (zero-export)
+///       "token": "0x..", "tokenPool": "0x.."   // EVM hex, or non-EVM base58 (e.g. a Solana pool)
+///     },
+///     "deployments": {                   // uniquely named per artifact (type + version in the key)
+///       "BnM-T_Token": "0x..",
+///       "BnM-T_BurnMintTokenPool_2.0.0": "0x.."
+///     }
 ///   },
-///   "deployments": {                   // uniquely named per artifact (type + version in the key)
-///     "BnM-T_Token": "0x..",
-///     "BnM-T_BurnMintTokenPool_2.0.0": "0x..",
-///     "BnM-T_LockBox": "0x..",
-///     "BnM-T_BurnMint_PoolHooks": "0x.."
-///   }
+///   "lanes": { ... }, "roles": { ... }, "schema": 3
 /// }
 /// ```
-/// `read(chainId, role)` resolves `.active.<role>` (with a legacy fallback to a flat top-level
-/// `.<role>` so any pre-v2 runtime file keeps resolving). The redeploy guard keys on the unique
-/// `deployments` name: because the key includes the pool's TYPE and VERSION, distinct artifacts never
-/// collide (a different type or version is a different key and records freely), while re-deploying the
-/// *same* name is guarded and needs `FORCE_REDEPLOY=true`. Note the deploy scripts pin the pool version
-/// (`DeploymentRecorder.POOL_VERSION` = "2.0.0"), so the scripts only ever emit the `_2.0.0` key.
+/// Values are **family-validated strings** on write (EVM hex, or non-EVM base58 that base58-decodes to
+/// exactly 32 bytes — via `ChainHandlers`), so a project's non-EVM remote artifacts (the Solana token
+/// and pool an EVM pool's `applyChainUpdates` needs) live in the reviewed project file, not an ephemeral
+/// env var. `read(selectorName, role)` resolves `.addresses.active.<role>` (as an EVM `address`);
+/// `readString` returns the raw value for non-EVM resolution.
 ///
-/// Needs `fs_permissions` read-write on `./addresses` (covered by the repo's root permission).
+/// **Every write is subtree-isolated.** All writes go through targeted `vm.writeJson(_, path,
+/// ".addresses")`; the whole-file `vm.writeFile` is FORBIDDEN, because `addresses`/`lanes`/`roles`
+/// share one file and a whole-file write would clobber the sibling subtrees. The project file is
+/// seeded (all three subtrees) by `ProjectStore.seedIfAbsent` before any targeted write.
+///
+/// Needs `fs_permissions` read-write on `./project` (covered by the repo's root permission).
 library RegistryWriter {
     /// @dev Well-known cheatcode address (forge-std pattern) so a library can reach `vm`.
     Vm private constant VM = Vm(address(uint160(uint256(keccak256("hevm cheat code")))));
@@ -55,40 +66,42 @@ library RegistryWriter {
 
     /// @notice Script-facing idempotency guard — call BEFORE `vm.startBroadcast()`. `deploymentName`
     /// is the unique `deployments` key (e.g. `BnM-T_BurnMintTokenPool_2.0.0`).
-    function guard(uint256 chainId, string memory deploymentName) internal {
+    function guard(string memory selectorName, string memory deploymentName) internal {
         if (VM.isContext(VmSafe.ForgeContext.TestGroup)) return;
-        guardRedeploy(chainId, deploymentName);
+        guardRedeploy(selectorName, deploymentName);
     }
 
     /// @notice Script-facing single-writer registry write — call after the deployment succeeds. Upserts
     /// BOTH the named `deployments[deploymentName]` entry AND the `active[role]` pointer in one call.
-    /// Only a real broadcast (`--broadcast` / `--resume`) mutates the registry.
-    function record(uint256 chainId, string memory role, string memory deploymentName, address addr) internal {
+    /// Only a real broadcast (`--broadcast` / `--resume`) mutates the store.
+    function record(string memory selectorName, string memory role, string memory deploymentName, address addr)
+        internal
+    {
         if (!VM.isContext(VmSafe.ForgeContext.ScriptBroadcast) && !VM.isContext(VmSafe.ForgeContext.ScriptResume)) {
             return;
         }
-        recordDeterministic(chainId, role, deploymentName, addr);
+        recordDeterministic(selectorName, role, deploymentName, addr);
     }
 
     /// @notice Deploy idempotency guard (deterministic core entry). If `deploymentName` already
-    /// resolves to a non-zero address in `addresses/<chainId>.json` `deployments`, REFUSE (revert
-    /// naming the existing address and the exact override) unless env `FORCE_REDEPLOY=true`. When
-    /// forced, the stale entry is dropped from `deployments` (the old address stays in the append-only
-    /// ledger under `script/deployments/`; note the registry itself is gitignored, so it is NOT in git
-    /// history) so the post-deploy `record` registers the replacement.
-    /// First-time flows (no registry file / no entry for `deploymentName`) are complete no-ops.
-    function guardRedeploy(uint256 chainId, string memory deploymentName) internal {
-        guardRedeploy(chainId, deploymentName, VM.envOr("FORCE_REDEPLOY", false));
+    /// resolves to a non-zero address in the store's `deployments`, REFUSE (revert naming the existing
+    /// address and the exact override) unless env `FORCE_REDEPLOY=true`. When forced, the stale entry is
+    /// dropped from `deployments` (the replaced address stays in the append-only ledger under `history/`;
+    /// the project store itself is gitignored, so it is NOT in git history) so the post-deploy `record`
+    /// registers the replacement. First-time flows (no project file / no entry for `deploymentName`) are
+    /// complete no-ops.
+    function guardRedeploy(string memory selectorName, string memory deploymentName) internal {
+        guardRedeploy(selectorName, deploymentName, VM.envOr("FORCE_REDEPLOY", false));
     }
 
     /// @dev Deterministic core (the env read is split out so tests can exercise both the refuse and
     /// the force branches without toggling `FORCE_REDEPLOY` — `vm.setEnv` is process-wide and would
     /// race parallel test suites).
-    function guardRedeploy(uint256 chainId, string memory deploymentName, bool forced) internal {
-        address existing = readDeployment(chainId, deploymentName);
+    function guardRedeploy(string memory selectorName, string memory deploymentName, bool forced) internal {
+        address existing = readDeployment(selectorName, deploymentName);
         if (existing == address(0)) return; // first-time flow: nothing registered under this name
 
-        string memory path = _path(chainId);
+        string memory path = ProjectStore.path(selectorName);
         if (!forced) {
             revert(
                 string.concat(
@@ -102,133 +115,167 @@ library RegistryWriter {
                 )
             );
         }
-        console.log("FORCE_REDEPLOY=true:", deploymentName, "will be replaced in the registry; old address:");
-        console.log("  ", existing, "(stays in the append-only ledger: script/deployments)");
-        _dropDeployment(chainId, deploymentName); // drop the stale entry so record() registers the replacement
+        console.log("FORCE_REDEPLOY=true:", deploymentName, "will be replaced in the store; old address:");
+        console.log("  ", existing, "(stays in the append-only ledger: history/)");
+        _dropDeployment(selectorName, deploymentName); // drop the stale entry so record() registers the replacement
     }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Reads (optional fallback — NEVER revert)
+    // ─────────────────────────────────────────────────────────────────────────
 
     /// @notice Resolves a ROLE (`token`/`tokenPool`/`lockBox`/`poolHooks`) to the currently-active
-    /// address from `addresses/<chainId>.json`: `.active.<role>` first, then a legacy fallback to a
-    /// flat top-level `.<role>` (pre-v2 runtime files). `address(0)` when the file or the key is
-    /// absent (never reverts — callers treat the registry as an optional fallback).
-    function read(uint256 chainId, string memory role) internal view returns (address) {
-        string memory path = _path(chainId);
-        if (!VM.exists(path)) return address(0);
-        // TOCTOU-safe: a parallel test suite can remove this file between `exists` above and the read
-        // below (the resolution tests write then delete a throwaway chain's registry while another
-        // suite is constructing HelperConfig, which eagerly reads every configured chain). `readFile`
-        // reverts on a missing file, so a raw read would crash that unrelated suite; catch it and treat
-        // a vanished file exactly like an absent one (address(0)).
-        string memory json;
-        try VM.readFile(path) returns (string memory data) {
-            json = data;
+    /// address from `.addresses.active.<role>` as an EVM `address`. `address(0)` when the file/key is
+    /// absent OR the stored value is a non-EVM (base58) string (an EVM caller resolving a non-EVM chain);
+    /// use `readString` for the raw non-EVM value. Never reverts — callers treat the store as an
+    /// optional fallback.
+    function read(string memory selectorName, string memory role) internal view returns (address) {
+        string memory s = readString(selectorName, role);
+        if (bytes(s).length == 0) return address(0);
+        try VM.parseAddress(s) returns (address a) {
+            return a;
         } catch {
-            return address(0);
+            return address(0); // non-EVM (base58) value read through the EVM getter
         }
-        // Resilience: a parallel test suite may be mid-write to this chain's file (VM.writeFile
-        // truncates then writes, so a concurrent reader can momentarily see an empty/partial file).
-        // The registry is an OPTIONAL fallback that must NEVER revert (see the natspec / HelperConfig),
-        // so an empty or unparseable snapshot resolves to address(0) rather than crashing an unrelated
-        // test that merely constructed HelperConfig.
-        if (bytes(json).length == 0) return address(0);
-        string memory activeKey = string.concat(".active.", role);
+    }
+
+    /// @notice Resolves a ROLE to its RAW stored string (EVM hex or non-EVM base58). Empty string when
+    /// the file or the key is absent. Never reverts (see `read`). This is the non-EVM resolution path
+    /// the frozen EVM getter surface (`read`) cannot serve.
+    function readString(string memory selectorName, string memory role) internal view returns (string memory) {
+        string memory json = _readProjectJson(selectorName);
+        if (bytes(json).length == 0) return "";
+        string memory activeKey = string.concat(".addresses.active.", role);
         try VM.keyExistsJson(json, activeKey) returns (bool exists) {
-            if (exists) return VM.parseJsonAddress(json, activeKey);
+            if (exists) return VM.parseJsonString(json, activeKey);
+        } catch {
+            return "";
+        }
+        return "";
+    }
+
+    /// @notice Resolves a uniquely-named `deployments` entry (e.g. a specific pool type + version) as
+    /// an EVM `address`. `address(0)` when the file or the key is absent (never reverts).
+    function readDeployment(string memory selectorName, string memory deploymentName) internal view returns (address) {
+        string memory s = readDeploymentString(selectorName, deploymentName);
+        if (bytes(s).length == 0) return address(0);
+        try VM.parseAddress(s) returns (address a) {
+            return a;
         } catch {
             return address(0);
         }
-        // Legacy fallback: a pre-v2 flat `{ "<role>": "0x.." }` file keeps resolving.
-        string memory legacyKey = string.concat(".", role);
-        if (VM.keyExistsJson(json, legacyKey)) return VM.parseJsonAddress(json, legacyKey);
-        return address(0);
     }
 
-    /// @notice Resolves a uniquely-named `deployments` entry (e.g. a specific pool type + version).
-    /// `address(0)` when the file or the key is absent (never reverts).
-    function readDeployment(uint256 chainId, string memory deploymentName) internal view returns (address) {
-        string memory path = _path(chainId);
-        if (!VM.exists(path)) return address(0);
-        // TOCTOU-safe (see `read`): tolerate the file being removed by a parallel suite between the
-        // `exists` check and the read — a vanished file resolves to address(0), never a revert.
-        string memory json;
-        try VM.readFile(path) returns (string memory data) {
-            json = data;
-        } catch {
-            return address(0);
-        }
-        if (bytes(json).length == 0) return address(0); // concurrent-write snapshot: never revert
-        // Bracket notation: version keys (e.g. `..._2.0.0`) contain dots, which dot-path notation would
-        // mis-split. `["<key>"]` treats the whole name as one literal key.
-        string memory key = string.concat(".deployments[\"", deploymentName, "\"]");
-        try VM.keyExistsJson(json, key) returns (bool exists) {
-            if (exists) return VM.parseJsonAddress(json, key);
-        } catch {
-            return address(0);
-        }
-        return address(0);
-    }
-
-    /// @notice Upserts the `active[role]` pointer, preserving every other entry (both stores).
-    function setActive(uint256 chainId, string memory role, address addr) internal {
-        _warnRepoint(chainId, role, addr);
-        (string[] memory aKeys, address[] memory aVals, string[] memory dKeys, address[] memory dVals) =
-            _loadMaps(chainId);
-        (aKeys, aVals) = _upsert(aKeys, aVals, role, addr);
-        _store(chainId, aKeys, aVals, dKeys, dVals);
-        console.log(string.concat("Registry updated: addresses/", VM.toString(chainId), ".json (active.", role, ")"));
-    }
-
-    /// @notice Deterministic view helper: would calling `setActive`/`recordDeterministic` with
-    /// (`chainId`, `role`, `addr`) REPOINT the zero-export `active[role]` pointer onto a DIFFERENT
-    /// address? Returns (`repoints`, `previous`) where `previous` is the current `active[role]`
-    /// (`address(0)` when unset) and `repoints` is true ONLY when a non-zero pointer already exists
-    /// and differs from `addr`. First set (previous == 0) and idempotent re-set (previous == addr)
-    /// are NOT repoints. Pure of side effects (view) so `setActive`/`recordDeterministic` can gate the
-    /// repoint warning on it and the unit tests can assert it directly.
-    function wouldRepointActive(uint256 chainId, string memory role, address addr)
+    /// @notice The RAW stored string of a named `deployments` entry (EVM hex or non-EVM base58). Empty
+    /// when the file or the key is absent (never reverts).
+    function readDeploymentString(string memory selectorName, string memory deploymentName)
         internal
         view
-        returns (bool repoints, address previous)
+        returns (string memory)
     {
-        previous = read(chainId, role);
-        repoints = previous != address(0) && previous != addr;
+        string memory json = _readProjectJson(selectorName);
+        if (bytes(json).length == 0) return "";
+        // Bracket notation: version keys (e.g. `..._2.0.0`) contain dots, which dot-path notation would
+        // mis-split. `["<key>"]` treats the whole name as one literal key.
+        string memory key = string.concat(".addresses.deployments[\"", deploymentName, "\"]");
+        try VM.keyExistsJson(json, key) returns (bool exists) {
+            if (exists) return VM.parseJsonString(json, key);
+        } catch {
+            return "";
+        }
+        return "";
+    }
+
+    /// @dev TOCTOU-safe optional read of `project/<selectorName>.json` — a parallel test suite can
+    /// remove or be mid-write to this file between checks (`vm.writeJson` truncates then writes), so a
+    /// vanished/empty/partial snapshot resolves to "" rather than crashing an unrelated suite that
+    /// merely constructed HelperConfig. The store is an OPTIONAL fallback that must NEVER revert.
+    function _readProjectJson(string memory selectorName) private view returns (string memory) {
+        string memory path = ProjectStore.path(selectorName);
+        if (!VM.exists(path)) return "";
+        try VM.readFile(path) returns (string memory data) {
+            return data;
+        } catch {
+            return "";
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Writes (subtree-isolated — NEVER writeFile the project file)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// @notice Upserts the `active[role]` pointer, preserving every other entry. EVM convenience
+    /// wrapper (address → validated hex string).
+    function setActive(string memory selectorName, string memory role, address addr) internal {
+        setActiveString(selectorName, role, VM.toString(addr));
+    }
+
+    /// @notice Upserts the `active[role]` pointer with a raw (family-validated) string value — the
+    /// non-EVM (base58) write path.
+    function setActiveString(string memory selectorName, string memory role, string memory value) internal {
+        ProjectStore.seedIfAbsent(selectorName);
+        _validateForFamily(selectorName, value);
+        _warnRepoint(selectorName, role, value);
+        (string[] memory aKeys, string[] memory aVals, string[] memory dKeys, string[] memory dVals) =
+            _loadMaps(selectorName);
+        (aKeys, aVals) = _upsert(aKeys, aVals, role, value);
+        _store(selectorName, aKeys, aVals, dKeys, dVals);
+        console.log(string.concat("Store updated: project/", selectorName, ".json (addresses.active.", role, ")"));
+    }
+
+    /// @notice Deterministic view helper: would setting (`selectorName`, `role`, `value`) REPOINT the
+    /// zero-export `active[role]` pointer onto a DIFFERENT value? Returns (`repoints`, `previous`) where
+    /// `previous` is the current raw `active[role]` ("" when unset) and `repoints` is true ONLY when a
+    /// non-empty pointer already exists and differs from `value`. First set and idempotent re-set are
+    /// NOT repoints. Pure of side effects so the write paths gate the repoint warning on it and unit
+    /// tests can assert it directly.
+    function wouldRepointActive(string memory selectorName, string memory role, string memory value)
+        internal
+        view
+        returns (bool repoints, string memory previous)
+    {
+        previous = readString(selectorName, role);
+        repoints = bytes(previous).length != 0 && keccak256(bytes(previous)) != keccak256(bytes(value));
     }
 
     /// @dev Warn LOUDLY (console only, no behavior change) when an `active[role]` pointer is about to
     /// be silently repointed onto a different address — e.g. deploying a second token on a chain moves
     /// `active.token` off the first fixture, hijacking the zero-export pointer every no-override script
-    /// resolves. The repoint still happens; the operator is told how to pin the previous address. Never
-    /// fires on a first set or an idempotent re-set (see `wouldRepointActive`). Both write paths that
-    /// touch `active[role]` (`setActive` and `recordDeterministic`) route through here.
-    function _warnRepoint(uint256 chainId, string memory role, address addr) private view {
-        (bool repoints, address previous) = wouldRepointActive(chainId, role, addr);
+    /// resolves. The repoint still happens; the operator is told how to pin the previous address —
+    /// **naming the store-native alternatives first** (re-adopt the intended one, or resolve the earlier
+    /// artifact from `deployments`), so a second token does not one-way-door a store-driven user into env
+    /// land. Never fires on a first set or idempotent re-set (see `wouldRepointActive`). Both write paths
+    /// that touch `active[role]` (`setActiveString`/`recordDeterministicString`) route through here.
+    function _warnRepoint(string memory selectorName, string memory role, string memory value) private view {
+        (bool repoints, string memory previous) = wouldRepointActive(selectorName, role, value);
         if (!repoints) return;
         string memory env = _roleEnvVar(role);
         console.log(
-            string.concat(
-                "WARNING: active.",
-                role,
-                " repointed ",
-                VM.toString(previous),
-                " -> ",
-                VM.toString(addr),
-                " on chain ",
-                VM.toString(chainId),
-                "."
-            )
+            string.concat("WARNING: active.", role, " repointed ", previous, " -> ", value, " on ", selectorName, ".")
         );
-        console.log(string.concat("         Scripts with no env override will now resolve ", VM.toString(addr), "."));
+        console.log(string.concat("         Scripts with no env override will now resolve ", value, "."));
         console.log(
             string.concat(
-                "         Export ",
+                "         To keep the previous one active, re-adopt it: make adopt-token CHAIN=",
+                selectorName,
+                " TOKEN=",
+                previous,
+                " (it stays in deployments; find earlier artifacts under .addresses.deployments)."
+            )
+        );
+        console.log(
+            string.concat(
+                "         Or for a one-off run, override read-only: ",
                 env,
                 "=",
-                VM.toString(previous),
-                " (or <CHAIN>_",
+                previous,
+                " (or ",
+                selectorName,
+                "_",
                 env,
                 "=",
-                VM.toString(previous),
-                ") to keep targeting the previous one."
+                previous,
+                ") - this does NOT write the store back."
             )
         );
     }
@@ -260,44 +307,69 @@ library RegistryWriter {
         return string(trimmed);
     }
 
-    /// @notice Upserts a named `deployments[deploymentName]` entry, preserving every other entry.
-    function setDeployment(uint256 chainId, string memory deploymentName, address addr) internal {
-        (string[] memory aKeys, address[] memory aVals, string[] memory dKeys, address[] memory dVals) =
-            _loadMaps(chainId);
-        (dKeys, dVals) = _upsert(dKeys, dVals, deploymentName, addr);
-        _store(chainId, aKeys, aVals, dKeys, dVals);
+    /// @notice Upserts a named `deployments[deploymentName]` entry, preserving every other entry. EVM
+    /// convenience wrapper.
+    function setDeployment(string memory selectorName, string memory deploymentName, address addr) internal {
+        setDeploymentString(selectorName, deploymentName, VM.toString(addr));
+    }
+
+    /// @notice Upserts a named `deployments[deploymentName]` entry with a raw (family-validated) string.
+    function setDeploymentString(string memory selectorName, string memory deploymentName, string memory value)
+        internal
+    {
+        ProjectStore.seedIfAbsent(selectorName);
+        _validateForFamily(selectorName, value);
+        (string[] memory aKeys, string[] memory aVals, string[] memory dKeys, string[] memory dVals) =
+            _loadMaps(selectorName);
+        (dKeys, dVals) = _upsert(dKeys, dVals, deploymentName, value);
+        _store(selectorName, aKeys, aVals, dKeys, dVals);
         console.log(
-            string.concat(
-                "Registry updated: addresses/", VM.toString(chainId), ".json (deployments.", deploymentName, ")"
-            )
+            string.concat("Store updated: project/", selectorName, ".json (addresses.deployments.", deploymentName, ")")
         );
     }
 
     /// @notice Back-compat alias: records a ROLE pointer (writes `active[role]`). Retained so callers
     /// that only need the resolvable-pointer semantics (and the resolution tests) keep working.
-    function set(uint256 chainId, string memory role, address addr) internal {
-        setActive(chainId, role, addr);
+    function set(string memory selectorName, string memory role, address addr) internal {
+        setActive(selectorName, role, addr);
     }
 
-    /// @notice Deterministic single-writer core: upserts `deployments[deploymentName]` AND
-    /// `active[role]` in ONE file write, so the two stores can never drift apart. This is the
-    /// anti-duplication write the deploy scripts route every artifact through (via `record`).
-    function recordDeterministic(uint256 chainId, string memory role, string memory deploymentName, address addr)
-        internal
-    {
-        _warnRepoint(chainId, role, addr);
-        (string[] memory aKeys, address[] memory aVals, string[] memory dKeys, address[] memory dVals) =
-            _loadMaps(chainId);
-        (dKeys, dVals) = _upsert(dKeys, dVals, deploymentName, addr);
-        (aKeys, aVals) = _upsert(aKeys, aVals, role, addr);
-        _store(chainId, aKeys, aVals, dKeys, dVals);
+    /// @notice Deterministic single-writer core (EVM): upserts `deployments[deploymentName]` AND
+    /// `active[role]` in ONE subtree write. This is the anti-duplication write the deploy scripts route
+    /// every artifact through (via `record`).
+    function recordDeterministic(
+        string memory selectorName,
+        string memory role,
+        string memory deploymentName,
+        address addr
+    ) internal {
+        recordDeterministicString(selectorName, role, deploymentName, VM.toString(addr));
+    }
+
+    /// @notice Deterministic single-writer core with a raw (family-validated) string value — the
+    /// non-EVM (base58) declare/adopt path. Upserts both `deployments[deploymentName]` and
+    /// `active[role]` in one subtree write, so the two can never drift apart.
+    function recordDeterministicString(
+        string memory selectorName,
+        string memory role,
+        string memory deploymentName,
+        string memory value
+    ) internal {
+        ProjectStore.seedIfAbsent(selectorName);
+        _validateForFamily(selectorName, value);
+        _warnRepoint(selectorName, role, value);
+        (string[] memory aKeys, string[] memory aVals, string[] memory dKeys, string[] memory dVals) =
+            _loadMaps(selectorName);
+        (dKeys, dVals) = _upsert(dKeys, dVals, deploymentName, value);
+        (aKeys, aVals) = _upsert(aKeys, aVals, role, value);
+        _store(selectorName, aKeys, aVals, dKeys, dVals);
         console.log(
             string.concat(
-                "Registry updated: addresses/",
-                VM.toString(chainId),
-                ".json (deployments.",
+                "Store updated: project/",
+                selectorName,
+                ".json (addresses.deployments.",
                 deploymentName,
-                " + active.",
+                " + addresses.active.",
                 role,
                 ")"
             )
@@ -305,20 +377,50 @@ library RegistryWriter {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // Internal file (de)serialization
+    // Family validation (EVM hex / non-EVM base58) — reads the chain's declared family
     // ─────────────────────────────────────────────────────────────────────────
 
-    function _path(uint256 chainId) private view returns (string memory) {
-        return string.concat(VM.projectRoot(), "/addresses/", VM.toString(chainId), ".json");
+    /// @dev Validates that `value` is a syntactically valid address for the chain's declared
+    /// `chainFamily` (EVM hex, or SVM base58 that decodes to exactly 32 bytes). The family is read from
+    /// `config/chains/<selectorName>.json`; when no config file exists (a bare unit-test scratch chain)
+    /// EVM/hex is assumed. Reverts with a NAMED error on a family mismatch (hex on SVM, base58 on EVM)
+    /// or malformed value, never a raw cheatcode revert.
+    function _validateForFamily(string memory selectorName, string memory value) private view {
+        ChainHandlers.ChainFamily fam = _family(selectorName);
+        require(
+            ChainHandlers.validateChainAddress(value, fam),
+            string.concat(
+                "[project] '",
+                value,
+                "' is not a valid ",
+                fam == ChainHandlers.ChainFamily.EVM ? "EVM (0x + 40 hex)" : "SVM (base58, 32 bytes)",
+                " address for ",
+                selectorName
+            )
+        );
     }
 
-    /// @dev Drops `deploymentName` from `deployments` and clears any `active[role]` that pointed at the
-    /// dropped address (so a forced redeploy leaves no dangling active pointer).
-    function _dropDeployment(uint256 chainId, string memory deploymentName) private {
-        (string[] memory aKeys, address[] memory aVals, string[] memory dKeys, address[] memory dVals) =
-            _loadMaps(chainId);
+    function _family(string memory selectorName) private view returns (ChainHandlers.ChainFamily) {
+        string memory cfg = string.concat(VM.projectRoot(), "/config/chains/", selectorName, ".json");
+        if (!VM.exists(cfg)) return ChainHandlers.ChainFamily.EVM;
+        try VM.readFile(cfg) returns (string memory json) {
+            return ChainHandlers.parseChainFamily(VM.parseJsonString(json, ".chainFamily"));
+        } catch {
+            return ChainHandlers.ChainFamily.EVM;
+        }
+    }
 
-        address dropped = address(0);
+    // ─────────────────────────────────────────────────────────────────────────
+    // Internal (de)serialization — canonical (sorted keys, 2-space via writeJson, no trailing newline)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// @dev Drops `deploymentName` from `deployments` and clears any `active[role]` that pointed at the
+    /// dropped value (so a forced redeploy leaves no dangling active pointer).
+    function _dropDeployment(string memory selectorName, string memory deploymentName) private {
+        (string[] memory aKeys, string[] memory aVals, string[] memory dKeys, string[] memory dVals) =
+            _loadMaps(selectorName);
+
+        string memory dropped = "";
         for (uint256 i = 0; i < dKeys.length; i++) {
             if (keccak256(bytes(dKeys[i])) == keccak256(bytes(deploymentName))) {
                 dropped = dVals[i];
@@ -326,71 +428,104 @@ library RegistryWriter {
             }
         }
         (dKeys, dVals) = _remove(dKeys, dVals, deploymentName);
-        if (dropped != address(0)) {
+        if (bytes(dropped).length != 0) {
             (aKeys, aVals) = _removeByValue(aKeys, aVals, dropped);
         }
-        _store(chainId, aKeys, aVals, dKeys, dVals);
+        _store(selectorName, aKeys, aVals, dKeys, dVals);
     }
 
-    function _loadMaps(uint256 chainId)
+    function _loadMaps(string memory selectorName)
         private
         view
-        returns (string[] memory aKeys, address[] memory aVals, string[] memory dKeys, address[] memory dVals)
+        returns (string[] memory aKeys, string[] memory aVals, string[] memory dKeys, string[] memory dVals)
     {
-        string memory path = _path(chainId);
+        string memory path = ProjectStore.path(selectorName);
         if (!VM.exists(path)) {
-            return (new string[](0), new address[](0), new string[](0), new address[](0));
+            return (new string[](0), new string[](0), new string[](0), new string[](0));
         }
         string memory json = VM.readFile(path);
-        (aKeys, aVals) = _readObj(json, ".active");
-        (dKeys, dVals) = _readObj(json, ".deployments");
+        (aKeys, aVals) = _readObj(json, ".addresses.active");
+        (dKeys, dVals) = _readObj(json, ".addresses.deployments");
     }
 
     function _readObj(string memory json, string memory objPath)
         private
         view
-        returns (string[] memory keys, address[] memory vals)
+        returns (string[] memory keys, string[] memory vals)
     {
         if (!VM.keyExistsJson(json, objPath)) {
-            return (new string[](0), new address[](0));
+            return (new string[](0), new string[](0));
         }
         keys = VM.parseJsonKeys(json, objPath);
-        vals = new address[](keys.length);
+        vals = new string[](keys.length);
         for (uint256 i = 0; i < keys.length; i++) {
             // Bracket notation so keys containing dots (versioned pool names) are read as one literal key.
-            vals[i] = VM.parseJsonAddress(json, string.concat(objPath, "[\"", keys[i], "\"]"));
+            vals[i] = VM.parseJsonString(json, string.concat(objPath, "[\"", keys[i], "\"]"));
         }
     }
 
+    /// @dev Writes the `.addresses` subtree only (targeted `vm.writeJson`, never `writeFile`), keys in
+    /// SORTED order at every level so forge's insertion-order serialization is byte-canonical.
     function _store(
-        uint256 chainId,
+        string memory selectorName,
         string[] memory aKeys,
-        address[] memory aVals,
+        string[] memory aVals,
         string[] memory dKeys,
-        address[] memory dVals
+        string[] memory dVals
     ) private {
-        string memory body = string.concat(
-            "{\n    \"active\": ", _obj(aKeys, aVals), ",\n    \"deployments\": ", _obj(dKeys, dVals), "\n}\n"
-        );
-        VM.writeFile(_path(chainId), body);
+        (aKeys, aVals) = _sort(aKeys, aVals);
+        (dKeys, dVals) = _sort(dKeys, dVals);
+        // Compact JSON with explicitly-quoted string values; `active` before `deployments` (sorted).
+        string memory addresses =
+            string.concat("{\"active\":", _obj(aKeys, aVals), ",\"deployments\":", _obj(dKeys, dVals), "}");
+        VM.writeJson(addresses, ProjectStore.path(selectorName), ".addresses");
     }
 
-    /// @dev Serializes a `{key: address}` map with 2-space nesting under a 4-space-indented parent key.
-    function _obj(string[] memory keys, address[] memory vals) private pure returns (string memory) {
+    /// @dev Serializes a `{key:"value"}` object as compact, sorted, string-valued JSON. Every value is
+    /// force-quoted so a numeric-looking address string can never be emitted as a JSON number.
+    function _obj(string[] memory keys, string[] memory vals) private pure returns (string memory) {
         if (keys.length == 0) return "{}";
         string memory inner = "";
         for (uint256 i = 0; i < keys.length; i++) {
-            inner = string.concat(
-                inner, "\n        \"", keys[i], "\": \"", VM.toString(vals[i]), "\"", i + 1 < keys.length ? "," : ""
-            );
+            inner = string.concat(inner, i == 0 ? "" : ",", "\"", keys[i], "\":\"", vals[i], "\"");
         }
-        return string.concat("{", inner, "\n    }");
+        return string.concat("{", inner, "}");
     }
 
-    function _upsert(string[] memory keys, address[] memory vals, string memory key, address val)
+    /// @dev Insertion sort of (keys, vals) by byte-lexicographic key order — matches `jq -S` for the
+    /// ASCII keys the store uses (role names, symbol_type_version deployment names). Small arrays.
+    function _sort(string[] memory keys, string[] memory vals) private pure returns (string[] memory, string[] memory) {
+        for (uint256 i = 1; i < keys.length; i++) {
+            string memory k = keys[i];
+            string memory v = vals[i];
+            uint256 j = i;
+            while (j > 0 && _lessThan(k, keys[j - 1])) {
+                keys[j] = keys[j - 1];
+                vals[j] = vals[j - 1];
+                j--;
+            }
+            keys[j] = k;
+            vals[j] = v;
+        }
+        return (keys, vals);
+    }
+
+    /// @dev Byte-lexicographic `a < b` (shorter prefix sorts first), matching `jq -S`'s key ordering
+    /// for ASCII keys.
+    function _lessThan(string memory a, string memory b) private pure returns (bool) {
+        bytes memory ba = bytes(a);
+        bytes memory bb = bytes(b);
+        uint256 n = ba.length < bb.length ? ba.length : bb.length;
+        for (uint256 i = 0; i < n; i++) {
+            if (ba[i] != bb[i]) return uint8(ba[i]) < uint8(bb[i]);
+        }
+        return ba.length < bb.length;
+    }
+
+    function _upsert(string[] memory keys, string[] memory vals, string memory key, string memory val)
         private
         pure
-        returns (string[] memory, address[] memory)
+        returns (string[] memory, string[] memory)
     {
         for (uint256 i = 0; i < keys.length; i++) {
             if (keccak256(bytes(keys[i])) == keccak256(bytes(key))) {
@@ -399,7 +534,7 @@ library RegistryWriter {
             }
         }
         string[] memory nk = new string[](keys.length + 1);
-        address[] memory nv = new address[](keys.length + 1);
+        string[] memory nv = new string[](keys.length + 1);
         for (uint256 i = 0; i < keys.length; i++) {
             nk[i] = keys[i];
             nv[i] = vals[i];
@@ -409,17 +544,17 @@ library RegistryWriter {
         return (nk, nv);
     }
 
-    function _remove(string[] memory keys, address[] memory vals, string memory key)
+    function _remove(string[] memory keys, string[] memory vals, string memory key)
         private
         pure
-        returns (string[] memory, address[] memory)
+        returns (string[] memory, string[] memory)
     {
         uint256 n = 0;
         for (uint256 i = 0; i < keys.length; i++) {
             if (keccak256(bytes(keys[i])) != keccak256(bytes(key))) n++;
         }
         string[] memory nk = new string[](n);
-        address[] memory nv = new address[](n);
+        string[] memory nv = new string[](n);
         uint256 j = 0;
         for (uint256 i = 0; i < keys.length; i++) {
             if (keccak256(bytes(keys[i])) == keccak256(bytes(key))) continue;
@@ -430,20 +565,20 @@ library RegistryWriter {
         return (nk, nv);
     }
 
-    function _removeByValue(string[] memory keys, address[] memory vals, address val)
+    function _removeByValue(string[] memory keys, string[] memory vals, string memory val)
         private
         pure
-        returns (string[] memory, address[] memory)
+        returns (string[] memory, string[] memory)
     {
         uint256 n = 0;
         for (uint256 i = 0; i < vals.length; i++) {
-            if (vals[i] != val) n++;
+            if (keccak256(bytes(vals[i])) != keccak256(bytes(val))) n++;
         }
         string[] memory nk = new string[](n);
-        address[] memory nv = new address[](n);
+        string[] memory nv = new string[](n);
         uint256 j = 0;
         for (uint256 i = 0; i < keys.length; i++) {
-            if (vals[i] == val) continue;
+            if (keccak256(bytes(vals[i])) == keccak256(bytes(val))) continue;
             nk[j] = keys[i];
             nv[j] = vals[i];
             j++;

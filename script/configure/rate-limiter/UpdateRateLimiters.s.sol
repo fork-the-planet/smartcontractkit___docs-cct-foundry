@@ -16,7 +16,7 @@ import {EoaExecutor} from "../../../src/base/EoaExecutor.s.sol";
 ///
 /// The direction(s) to update are inferred automatically: set OUTBOUND_* vars to update outbound,
 /// INBOUND_* vars to update inbound, or both sets to update both. A direction with no env vars is
-/// resolved from the declared `lanes{}` policy in `config/chains/<local>.json` when the matched lane
+/// resolved from the declared `lanes{}` policy in `project/<local>.json` when the matched lane
 /// entry declares it (see the input ladder below). At least one direction must come from one of the
 /// two sources.
 ///
@@ -39,8 +39,8 @@ import {EoaExecutor} from "../../../src/base/EoaExecutor.s.sol";
 ///
 /// Rate-limit input resolution ladder (per direction — matching the repo's inline > env > registry
 /// idiom, and the same ladder ApplyChainUpdates CLI mode uses):
-///   1. Any of the direction's rate-limit env vars set → the env values win, byte-for-byte the
-///      historical behavior above. When the local chain config declares a diverging policy for the
+///   1. Any of the direction's rate-limit env vars set → the env values win. When the local chain
+///      config declares a diverging policy for the
 ///      bucket being written, a one-line console notice names both values (`make doctor` WARNs
 ///      until reconciled) and the closing output prints a hand-edit remediation hint.
 ///   2. Env vars unset for a direction → the declared `lanes{}` policy supplies that bucket, scoped
@@ -203,9 +203,9 @@ contract UpdateRateLimiters is EoaExecutor, LanePolicySource {
         console.log("");
     }
 
-    // ── Input resolution (env > lanes{} > historical error) ────────────────
+    // ── Input resolution (env > lanes{} > error) ────────────────
 
-    /// @dev Reads the rate-limit env vars through the env seams — byte-for-byte the semantics of
+    /// @dev Reads the rate-limit env vars through the env seams — the same semantics as
     ///      `RateLimiterUtils.readRateLimitUpdate` (which reads the process env directly and stays
     ///      untouched for its other consumers): any of a direction's vars triggers the direction,
     ///      isEnabled defaults to true when CAPACITY or RATE is set, ENABLED overrides explicitly.
@@ -248,8 +248,9 @@ contract UpdateRateLimiters is EoaExecutor, LanePolicySource {
         res.outboundFromEnv = envUpdate.updateOutbound;
         res.inboundFromEnv = envUpdate.updateInbound;
 
-        string memory json;
-        (res.configFound, res.configName, json) = _findLocalChainConfig();
+        // Chain existence + name from config/chains; the lanes{} policy from the project store.
+        (res.configFound, res.configName,) = _findLocalChainConfig();
+        string memory json = _localProjectJson(res.configName);
         if (res.configFound) (res.laneFound, res.laneKey) = _findLaneKey(json, destChainName, destChainSelector);
         if (res.laneFound) _readDeclaredBuckets(res, json);
         // When no entry matched, notices and hints still name the entry to declare: the remote's
@@ -311,7 +312,7 @@ contract UpdateRateLimiters is EoaExecutor, LanePolicySource {
                 fastFinalityBucket
                     ? "lanes.<remote>.v2.fastFinality.{outbound,inbound} bucket(s)"
                     : "lanes.<remote> policy (capacity/rate, optional inbound{})",
-                " in config/chains/",
+                " in project/",
                 res.configFound ? res.configName : "<local>",
                 ".json"
             )
@@ -381,7 +382,7 @@ contract UpdateRateLimiters is EoaExecutor, LanePolicySource {
                     "Rate limits resolved from lanes.",
                     res.laneKey,
                     res.fastFinality ? ".v2.fastFinality" : "",
-                    " in config/chains/",
+                    " in project/",
                     res.configName,
                     ".json (",
                     res.outboundFromLanes ? (res.inboundFromLanes ? "outbound + inbound" : "outbound") : "inbound",
@@ -398,7 +399,7 @@ contract UpdateRateLimiters is EoaExecutor, LanePolicySource {
                 string.concat(
                     "No lanes{} entry for ",
                     destChainName,
-                    " in config/chains/",
+                    " in project/",
                     res.configName,
                     ".json; applying the env values (declare the lane to make the policy reviewable)"
                 )
@@ -429,7 +430,7 @@ contract UpdateRateLimiters is EoaExecutor, LanePolicySource {
             vm.toString(declCapacity),
             " rate=",
             vm.toString(declRate),
-            ") in config/chains/",
+            ") in project/",
             res.configName,
             ".json - make doctor will WARN until reconciled"
         );
@@ -457,7 +458,7 @@ contract UpdateRateLimiters is EoaExecutor, LanePolicySource {
             (inbound ? res.inboundDeclared : res.outboundDeclared) ? "diverging from" : "not declared in",
             " ",
             _bucketPath(res, inbound),
-            " (config/chains/",
+            " (project/",
             res.configName,
             ".json). Hand-edit the entry to capacity=",
             vm.toString(uint256(applied.capacity)),

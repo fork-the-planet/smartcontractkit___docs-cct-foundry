@@ -4,6 +4,7 @@ pragma solidity 0.8.24;
 import {Script} from "forge-std/Script.sol";
 import {RateLimiter} from "@chainlink/contracts-ccip/contracts/libraries/RateLimiter.sol";
 import {ChainConfig} from "../../src/config/ChainConfig.sol";
+import {ProjectStore} from "../../src/utils/ProjectStore.sol";
 
 /// @notice Shared plumbing for scripts that resolve their inputs through the env-over-lanes{}
 ///         input ladder: local-chain-config discovery, lanes{} entry matching, declared-bucket
@@ -44,6 +45,19 @@ abstract contract LanePolicySource is Script {
     // ─────────────────────────────────────────────────────────────────────────
     // Local config discovery + lanes{} matching
     // ─────────────────────────────────────────────────────────────────────────
+
+    /// @dev The local chain's project store (`project/<name>.json`), which now holds the `lanes{}`
+    ///      subtree the ladder resolves — the empty JSON object `"{}"` when the chain has no project file
+    ///      yet. The `"{}"` sentinel (NOT `""`) is deliberate: `keyExistsJson("", …)` REVERTS ("EOF while
+    ///      parsing"), whereas `keyExistsJson("{}", …)` returns false, so callers read an absent store as
+    ///      "no lane declared" without a raw parse revert. Chain FACTS still come from
+    ///      `_findLocalChainConfig`; lane POLICY comes from here.
+    function _localProjectJson(string memory name) internal view returns (string memory) {
+        string memory p = ProjectStore.path(name);
+        if (!vm.exists(p)) return "{}";
+        string memory data = vm.readFile(p);
+        return bytes(data).length == 0 ? "{}" : data;
+    }
 
     /// @dev The local chain's config file (matched on the declared `chainId` == block.chainid),
     ///      discovered the same way HelperConfig discovers chains: by scanning `config/chains/`.

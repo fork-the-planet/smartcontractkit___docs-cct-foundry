@@ -13,7 +13,6 @@
     "tokenAdminRegistry": "0x95F29FEE11c5C55d26cCcf1DB6772DE953B37B82",
     "tokenPoolFactory": "0x2067C0444F9dc58cFB33B095279A28886562f169"
   },
-  "ccipBnM": "0x9a97F119cFE1D5Ea77c264441C0A0aBC9B34E119",
   "chainFamily": "evm",
   "chainId": "11155111",
   "chainNameIdentifier": "ETHEREUM_SEPOLIA",
@@ -22,7 +21,6 @@
   "displayName": "Ethereum Sepolia",
   "environment": "testnet",
   "explorerUrl": "https://sepolia.etherscan.io",
-  "lanes": {},
   "name": "ethereum-testnet-sepolia",
   "nativeCurrencySymbol": "ETH",
   "rpcEnv": "ETHEREUM_SEPOLIA_RPC_URL"

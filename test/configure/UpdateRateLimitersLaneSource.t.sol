@@ -178,7 +178,7 @@ contract UpdateRateLimitersLaneSourceTest is LaneReconcileScratch {
         assertEq(
             res.outboundHint,
             string.concat(
-                unicode"⚠️  Applied OUTBOUND values are not declared in lanes.zz-scratch-rlsrc-r1 (config/chains/",
+                unicode"⚠️  Applied OUTBOUND values are not declared in lanes.zz-scratch-rlsrc-r1 (project/",
                 local,
                 ".json). Hand-edit the entry to capacity=",
                 vm.toString(uint256(ENV_CAPACITY)),
@@ -241,7 +241,7 @@ contract UpdateRateLimitersLaneSourceTest is LaneReconcileScratch {
                 vm.toString(uint256(LANE_CAPACITY)),
                 " rate=",
                 vm.toString(uint256(LANE_RATE)),
-                ") in config/chains/",
+                ") in project/",
                 local,
                 ".json - make doctor will WARN until reconciled"
             ),
@@ -345,7 +345,7 @@ contract UpdateRateLimitersLaneSourceTest is LaneReconcileScratch {
             bytes(
                 string.concat(
                     "At least one direction must be specified: set OUTBOUND_* and/or INBOUND_* rate limit env vars, ",
-                    "or declare the lanes.<remote> policy (capacity/rate, optional inbound{}) in config/chains/",
+                    "or declare the lanes.<remote> policy (capacity/rate, optional inbound{}) in project/",
                     local,
                     ".json"
                 )
@@ -471,7 +471,7 @@ contract UpdateRateLimitersLaneSourceTest is LaneReconcileScratch {
             bytes(
                 string.concat(
                     "At least one direction must be specified: set OUTBOUND_* and/or INBOUND_* rate limit env vars, ",
-                    "or declare the lanes.<remote>.v2.fastFinality.{outbound,inbound} bucket(s) in config/chains/",
+                    "or declare the lanes.<remote>.v2.fastFinality.{outbound,inbound} bucket(s) in project/",
                     local,
                     ".json"
                 )

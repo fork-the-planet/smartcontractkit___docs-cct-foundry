@@ -8,6 +8,7 @@ import {console} from "forge-std/console.sol";
 import {IConfigSource} from "../../src/config/IConfigSource.sol";
 import {CcipApiSource} from "../../src/config/CcipApiSource.sol";
 import {RegistryWriter} from "../../src/utils/RegistryWriter.sol";
+import {ProjectStore} from "../../src/utils/ProjectStore.sol";
 
 /// @title SyncCcipConfig
 /// @notice The config-sync entrypoints: everything that generates, refreshes, or drift-checks a
@@ -33,10 +34,11 @@ import {RegistryWriter} from "../../src/utils/RegistryWriter.sol";
 /// `registryModuleOwnerCustom`, `link`, `feeQuoter`, `tokenPoolFactory`, `feeTokens[]`) — AND the
 /// API-served identity + metadata fields (`displayName`, `chainFamily`, `environment`, `explorerUrl`,
 /// `nativeCurrencySymbol`), all of which `GET /v2/chains/{selector}` serves, so none is hand-typed.
-/// What it PRESERVES (never touches): the genuinely hand-authored keys the API serves nothing for
-/// (`chainNameIdentifier`, `rpcEnv`, `confirmations`, `ccipBnM`), the `lanes{}` policy subtree
-/// (owner-written via `addLane`, never by the sync), and the immutable join keys
+/// What it PRESERVES (never touches): the THREE genuinely hand-authored keys the API serves nothing for
+/// (`chainNameIdentifier`, `rpcEnv`, `confirmations`) and the immutable join keys
 /// (`name`/`chainSelector`/`chainId`) which are GUARD-validated, not rewritten. One writer per field.
+/// Project state (`lanes{}`, `roles{}`, deployed `addresses{}`) is NOT in this file — it lives in
+/// `project/<selectorName>.json`, so the sync never touches it (config/chains is pure API/chain facts).
 ///
 /// Guards (each verified by `script/config/test-tooling.sh`):
 ///   - SELECTOR MISMATCH: after every fetch the API's chainId must equal the local file's chainId —
@@ -202,10 +204,11 @@ contract SyncCcipConfig is Script {
     /// hand-authored key. The API-sync writer now owns the `ccip{}` address block AND the API-served
     /// identity + metadata fields (`displayName`, `chainFamily`, `environment`, `explorerUrl`,
     /// `nativeCurrencySymbol`) — all of which the CCIP REST API serves, so none of them should be
-    /// hand-typed. Hand-authored keys (`chainNameIdentifier`, `rpcEnv`, `confirmations`, `ccipBnM`),
-    /// the `lanes{}` policy subtree (owner-written via `addLane`), and the immutable join keys
-    /// (`name`/`chainSelector`/`chainId`, guarded, not rewritten) are preserved untouched. Non-EVM chains have no EVM-shaped `chainConfig`, so their `ccip{}` block
-    /// stays zeroed (SKIP), but their chain-level identity + metadata ARE served and get refreshed.
+    /// hand-typed. The three hand-authored keys (`chainNameIdentifier`, `rpcEnv`, `confirmations`) and
+    /// the immutable join keys (`name`/`chainSelector`/`chainId`, guarded, not rewritten) are preserved
+    /// untouched; project state (`lanes{}`/`roles{}`/`addresses{}`) is not in this file. Non-EVM chains
+    /// have no EVM-shaped `chainConfig`, so their `ccip{}` block stays zeroed (SKIP), but their
+    /// chain-level identity + metadata ARE served and get refreshed.
     function run(string memory name) public {
         _requireSyncProfile();
         string memory path = _requireConfigExists(name);
@@ -238,7 +241,7 @@ contract SyncCcipConfig is Script {
     /// `GET /v2/chains/{selector}` — `displayName`/`chainFamily`/`environment` from `.chain`,
     /// `explorerUrl`/`nativeCurrencySymbol` from `.chainMetadata` — so none is hand-authored. NOT in
     /// this list (genuinely hand-authored, the API serves nothing for them): `chainNameIdentifier`,
-    /// `rpcEnv`, `confirmations`, `ccipBnM`.
+    /// `rpcEnv`, `confirmations`.
     function metadataKeys() public pure returns (string[5] memory) {
         return ["displayName", "chainFamily", "environment", "explorerUrl", "nativeCurrencySymbol"];
     }
@@ -296,7 +299,7 @@ contract SyncCcipConfig is Script {
     /// `chainNameIdentifier` defaults to UPPER_SNAKE(localName) and `rpcEnv` to
     /// `<chainNameIdentifier>_RPC_URL`; override per-run with the `CHAIN_NAME_IDENTIFIER` / `RPC_ENV`
     /// environment variables. Repo extras that the API does not carry (`confirmations`,
-    /// `explorerUrl`, `nativeCurrencySymbol`, `ccipBnM`) are written as review-me defaults.
+    /// `explorerUrl`, `nativeCurrencySymbol`) are written as review-me defaults.
     function init(string memory localName, uint256 selector) public {
         _requireSyncProfile();
         require(
@@ -344,18 +347,16 @@ contract SyncCcipConfig is Script {
         vm.serializeString(root, "chainId", isEvm ? vm.parseJsonString(meta, ".chainId") : "0");
         vm.serializeString(root, "chainSelector", vm.parseJsonString(meta, ".chainSelector"));
         vm.serializeString(root, "rpcEnv", rpcEnv);
-        // Genuinely hand-authored (the API serves nothing for these): confirmations (block
-        // confirmations the scripts wait for — user-overridable per chain, preserved by sync) and
-        // ccipBnM (optional). explorerUrl/nativeCurrencySymbol are seeded empty here but the
-        // `run(localName)` call below sources them from the API's chainMetadata in the same invocation.
+        // Genuinely hand-authored (the API serves nothing for it): confirmations (the block
+        // confirmations the scripts wait for — user-overridable per chain, preserved by sync).
+        // explorerUrl/nativeCurrencySymbol are seeded empty here but the `run(localName)` call below
+        // sources them from the API's chainMetadata in the same invocation.
         vm.serializeUint(root, "confirmations", 2);
         vm.serializeString(root, "explorerUrl", "");
         vm.serializeString(root, "nativeCurrencySymbol", "");
-        vm.serializeAddress(root, "ccipBnM", address(0));
-        // `vm.writeJson` cannot CREATE keys, so the stub must ship an (empty) ccip object — and, for
-        // EVM chains, an (empty) lanes object so `addLane` can write into it. Non-EVM chains are
-        // destination-only (no outbound lane policy), so they carry no lanes{}.
-        if (isEvm) vm.serializeString(root, "lanes", "{}");
+        // `vm.writeJson` cannot CREATE keys, so the stub ships an (empty) ccip object the sync fills
+        // below. lanes{}/roles{} + deployed addresses now live in project/<name>.json (seeded on the
+        // first add-lane / snapshot-chain / deploy), NOT here: config/chains is pure API/chain facts.
         string memory stub = vm.serializeString(root, "ccip", "{}");
         vm.writeFile(path, stub);
         console.log(
@@ -419,8 +420,8 @@ contract SyncCcipConfig is Script {
         console.log("");
         // Print the EXACT derived names: `chainNameIdentifier` is UPPER_SNAKE(selectorName) for newly
         // added chains, so it can differ in style from the bundled chains' curated short forms
-        // (e.g. AVALANCHE_TESTNET_FUJI, not AVALANCHE_FUJI). Printing them removes the guesswork — the
-        // operator no longer has to open the generated JSON to learn which env var to export.
+        // (e.g. AVALANCHE_TESTNET_FUJI, not AVALANCHE_FUJI). Printing them saves the operator opening
+        // the generated JSON to find which env var to export.
         console.log(string.concat("[add-chain] generated env-var names for ", localName, ":"));
         console.log(string.concat("  chainNameIdentifier: ", chainNameId));
         console.log(string.concat("  rpcEnv:              ", rpcEnv, "   <- export this to use RPC-dependent commands"));
@@ -437,7 +438,7 @@ contract SyncCcipConfig is Script {
             string.concat(
                 "  2. review the generated defaults in config/chains/",
                 localName,
-                ".json: chainNameIdentifier, rpcEnv, confirmations, explorerUrl, nativeCurrencySymbol, ccipBnM"
+                ".json: chainNameIdentifier, rpcEnv, confirmations, explorerUrl, nativeCurrencySymbol"
             )
         );
         if (isEvm) {
@@ -654,26 +655,29 @@ contract SyncCcipConfig is Script {
 
     function _addLane(string memory local, string memory remote, LanePolicy memory policy) internal {
         _requireSyncProfile();
-        string memory localPath = _requireConfigExists(local);
-        string memory remotePath = _requireConfigExists(remote);
+        string memory localConfigPath = _requireConfigExists(local);
+        string memory remoteConfigPath = _requireConfigExists(remote);
         require(
             keccak256(bytes(local)) != keccak256(bytes(remote)), "[add-lane] LOCAL and REMOTE must be different chains"
         );
 
-        string memory json = vm.readFile(localPath);
-        string memory remoteJson = vm.readFile(remotePath);
-        _requireNotSelfLane(local, remote, json, remoteJson);
+        // Chain FACTS (chainSelector, chainFamily) come from config/chains; the lanes{} POLICY subtree
+        // lives in the project store.
+        string memory localConfig = vm.readFile(localConfigPath);
+        string memory remoteConfig = vm.readFile(remoteConfigPath);
+        _requireNotSelfLane(local, remote, localConfig, remoteConfig);
         require(
-            vm.keyExistsJson(json, ".lanes"),
-            string.concat(
-                "[add-lane] ",
-                localPath,
-                " has no lanes object (non-EVM chains are destination-only) - for an EVM chain, seed \"lanes\": {}"
-            )
+            keccak256(bytes(vm.parseJsonString(localConfig, ".chainFamily"))) == keccak256(bytes("evm")),
+            string.concat("[add-lane] ", local, " is a non-EVM chain (destination-only) - it has no outbound lanes{}")
         );
-        if (vm.keyExistsJson(json, string.concat(".lanes.", remote))) {
+
+        // Seed the project skeleton on first touch so the targeted `.lanes` write never raw-reverts.
+        ProjectStore.seedIfAbsent(local);
+        string memory projectPath = ProjectStore.path(local);
+        string memory projectJson = vm.readFile(projectPath);
+        if (vm.keyExistsJson(projectJson, string.concat(".lanes.", remote))) {
             string memory lanePath = string.concat(".lanes.", remote);
-            if (_lanePolicyMatches(json, lanePath, policy)) {
+            if (_lanePolicyMatches(projectJson, lanePath, policy)) {
                 // Identical re-run: a byte-identical no-op (the write is skipped entirely).
                 console.log(
                     string.concat(
@@ -681,7 +685,7 @@ contract SyncCcipConfig is Script {
                         local,
                         " -> ",
                         remote,
-                        " already exists - no-op (edit config/chains/",
+                        " already exists - no-op (edit project/",
                         local,
                         ".json to change policy)"
                     )
@@ -689,12 +693,14 @@ contract SyncCcipConfig is Script {
             } else {
                 // Changed capacity/rate on an existing entry: never a silent no-op. WARN naming the
                 // existing vs requested values, leave the entry unchanged, and name the remediation.
-                _warnChangedLane(json, lanePath, local, remote, policy);
+                _warnChangedLane(projectJson, lanePath, local, remote, policy);
             }
             return;
         }
-        _warnPlaceholderPool(remote, remoteJson);
-        _writeLaneSubtree(local, localPath, json, remote, vm.parseJsonString(remoteJson, ".chainSelector"), policy);
+        _warnPlaceholderPool(remote, remoteConfig);
+        _writeLaneSubtree(
+            local, projectPath, projectJson, remote, vm.parseJsonString(remoteConfig, ".chainSelector"), policy
+        );
     }
 
     /// @dev The changed-args WARN: an existing entry with DIFFERENT capacity/rate, left unchanged.
@@ -733,7 +739,7 @@ contract SyncCcipConfig is Script {
 
     /// @dev Whether the existing lane entry at `lanePath` carries the SAME policy the caller passed
     ///      (capacity/rate, and the inbound{} block's presence + values). Governs the identical-re-run
-    ///      no-op vs the changed-args WARN: a byte-for-byte match is the idempotent no-op; any
+    ///      no-op vs the changed-args WARN: an exact match is the idempotent no-op; any
     ///      difference is a footgun the WARN surfaces instead of silently ignoring.
     function _lanePolicyMatches(string memory json, string memory lanePath, LanePolicy memory policy)
         internal
@@ -792,21 +798,16 @@ contract SyncCcipConfig is Script {
     /// the new entry and write the subtree back in one targeted `vm.writeJson`.
     function _writeLaneSubtree(
         string memory local,
-        string memory localPath,
+        string memory projectPath,
         string memory json,
         string memory remote,
         string memory remoteSelector,
         LanePolicy memory policy
     ) internal {
-        string[] memory laneNames = vm.parseJsonKeys(json, ".lanes");
-        string memory lanesObj = string.concat("lanes-", local);
-        string memory lanesJson = "{}";
-        for (uint256 i = 0; i < laneNames.length; i++) {
-            lanesJson = vm.serializeString(lanesObj, laneNames[i], _copyLaneEntry(json, laneNames[i]));
-        }
+        // Build the new entry with keys in SORTED order (capacity < inbound < rate < remoteSelector) so
+        // forge's insertion-order writeJson is canonical.
         string memory newEntry = string.concat("lane-new-", remote);
         vm.serializeString(newEntry, "capacity", vm.toString(policy.capacity));
-        vm.serializeString(newEntry, "rate", vm.toString(policy.rate));
         if (policy.withInbound) {
             string memory inboundObj = string.concat("lane-new-inbound-", remote);
             vm.serializeString(inboundObj, "capacity", vm.toString(policy.inboundCapacity));
@@ -814,9 +815,28 @@ contract SyncCcipConfig is Script {
                 newEntry, "inbound", vm.serializeString(inboundObj, "rate", vm.toString(policy.inboundRate))
             );
         }
-        lanesJson = vm.serializeString(lanesObj, remote, vm.serializeString(newEntry, "remoteSelector", remoteSelector));
+        vm.serializeString(newEntry, "rate", vm.toString(policy.rate));
+        string memory newEntryJson = vm.serializeString(newEntry, "remoteSelector", remoteSelector);
 
-        vm.writeJson(lanesJson, localPath, ".lanes");
+        // Merge existing + new lane names, sort them, then serialize in sorted order so the lanes{}
+        // subtree stays byte-canonical (== jq -S) on the direct forge path.
+        string[] memory existing = vm.parseJsonKeys(json, ".lanes");
+        string[] memory names = new string[](existing.length + 1);
+        for (uint256 i = 0; i < existing.length; i++) {
+            names[i] = existing[i];
+        }
+        names[existing.length] = remote;
+        names = _sortStrings(names);
+
+        string memory lanesObj = string.concat("lanes-", local);
+        string memory lanesJson = "{}";
+        for (uint256 i = 0; i < names.length; i++) {
+            string memory entry =
+                keccak256(bytes(names[i])) == keccak256(bytes(remote)) ? newEntryJson : _copyLaneEntry(json, names[i]);
+            lanesJson = vm.serializeString(lanesObj, names[i], entry);
+        }
+
+        vm.writeJson(lanesJson, projectPath, ".lanes");
         console.log(
             string.concat(
                 "[add-lane] wrote lane ",
@@ -876,21 +896,43 @@ contract SyncCcipConfig is Script {
         return out;
     }
 
-    /// @dev WARN (not fail) when the remote chain has no tokenPool in its deployed-address registry
-    /// (`addresses/<chainId>.json`) — the lane can be declared ahead of the deploy, but the transfer
-    /// scripts cannot execute against it until the pool exists. Non-EVM remotes are skipped: the
-    /// registry is keyed by numeric chainId, which non-EVM configs do not have (placeholder "0").
-    function _warnPlaceholderPool(string memory remote, string memory remoteJson) internal view {
-        if (keccak256(bytes(vm.parseJsonString(remoteJson, ".chainFamily"))) != keccak256(bytes("evm"))) return;
-        uint256 chainId = vm.parseJsonUint(remoteJson, ".chainId");
-        if (RegistryWriter.read(chainId, "tokenPool") == address(0)) {
+    /// @dev Byte-lexicographic insertion sort (matches `jq -S` key ordering for the ASCII lane keys),
+    /// so the written `lanes{}` subtree is byte-canonical on the direct forge path.
+    function _sortStrings(string[] memory a) internal pure returns (string[] memory) {
+        for (uint256 i = 1; i < a.length; i++) {
+            string memory k = a[i];
+            uint256 j = i;
+            while (j > 0 && _strLess(k, a[j - 1])) {
+                a[j] = a[j - 1];
+                j--;
+            }
+            a[j] = k;
+        }
+        return a;
+    }
+
+    function _strLess(string memory x, string memory y) private pure returns (bool) {
+        bytes memory bx = bytes(x);
+        bytes memory by = bytes(y);
+        uint256 n = bx.length < by.length ? bx.length : by.length;
+        for (uint256 i = 0; i < n; i++) {
+            if (bx[i] != by[i]) return uint8(bx[i]) < uint8(by[i]);
+        }
+        return bx.length < by.length;
+    }
+
+    /// @dev WARN (not fail) when the remote chain has no `tokenPool` in its project store
+    /// (`project/<remote>.json` `addresses.active.tokenPool`) — the lane can be declared ahead of the
+    /// deploy, but the transfer scripts cannot execute against it until the pool exists. Also covers
+    /// non-EVM remotes: the store holds their base58 pool (via `adopt-token`'s non-EVM path), so a
+    /// Solana remote with a declared pool does not trip this WARN.
+    function _warnPlaceholderPool(string memory remote, string memory) internal view {
+        if (bytes(RegistryWriter.readString(remote, "tokenPool")).length == 0) {
             console.log(
                 string.concat(
-                    "[add-lane] WARN: no tokenPool in addresses/",
-                    vm.toString(chainId),
-                    ".json for ",
+                    "[add-lane] WARN: no tokenPool in project/",
                     remote,
-                    " - deploy one (script/deploy/DeployBurnMintTokenPool.s.sol or DeployLockReleaseTokenPool.s.sol) before executing transfers over this lane"
+                    ".json (addresses.active.tokenPool) - deploy one (script/deploy/DeployBurnMintTokenPool.s.sol or DeployLockReleaseTokenPool.s.sol), or for a non-EVM remote declare it (make adopt-token), before executing transfers over this lane"
                 )
             );
         }
@@ -900,7 +942,7 @@ contract SyncCcipConfig is Script {
     // removeLane — `make remove-lane`: remove a lanes{} policy entry
     // ================================================================
 
-    /// @notice Remove the `.lanes.<remote>` entry from the LOCAL chain's config - the undo of
+    /// @notice Remove the `.lanes.<remote>` entry from the LOCAL chain's project store - the undo of
     /// `addLane`, with the same preserve-and-replace discipline: every OTHER lane entry is
     /// re-serialized verbatim (including nested `inbound{}`/`v2{}` blocks, via the recursive
     /// copier) and the subtree is written back in one targeted `vm.writeJson(json, path, ".lanes")`,
@@ -909,32 +951,25 @@ contract SyncCcipConfig is Script {
     /// has). No API fetch, and no check that the remote's config file still exists: removing a
     /// dangling lane (the mesh rung's FAIL for a renamed or deleted remote) is exactly this
     /// command's job.
-    /// @dev Declaration-only by design: the write touches `config/chains/<local>.json` and never
-    /// the pool. A lane that is applied on-chain must be removed there separately - the pool's
+    /// @dev Declaration-only by design: the write touches `project/<local>.json` and never the pool.
+    /// A lane that is applied on-chain must be removed there separately - the pool's
     /// `applyChainUpdates` takes the selector in its `remoteChainSelectorsToRemove` input (see
     /// `script/setup/ApplyChainUpdates.s.sol`) - and until it is, `make doctor`'s lanes rung WARNs
-    /// that the on-chain lane is not declared in `lanes{}`. Guards mirror `addLane`: a missing
-    /// config file and a missing `.lanes` object are named refusals, never raw cheatcode reverts.
+    /// that the on-chain lane is not declared in `lanes{}`. Removing the only lane leaves an empty
+    /// `lanes{}`; a never-touched chain has no project file, so there is nothing to remove.
     function removeLane(string memory local, string memory remote) public {
         _requireSyncProfile();
-        string memory localPath = _requireConfigExists(local);
-        string memory json = vm.readFile(localPath);
-        require(
-            vm.keyExistsJson(json, ".lanes"),
-            string.concat(
-                "[remove-lane] ",
-                localPath,
-                " has no lanes object (non-EVM chains are destination-only) - nothing to remove"
-            )
-        );
-        if (!vm.keyExistsJson(json, string.concat(".lanes.", remote))) {
+        _requireConfigExists(local); // the chain must be onboarded
+        string memory projectPath = ProjectStore.path(local);
+        string memory lanePath = string.concat(".lanes.", remote);
+        if (!vm.exists(projectPath) || !vm.keyExistsJson(vm.readFile(projectPath), lanePath)) {
             console.log(
                 string.concat(
                     "[remove-lane] lane ",
                     local,
                     " -> ",
                     remote,
-                    " is not declared - no-op (config/chains/",
+                    " is not declared - no-op (project/",
                     local,
                     ".json unchanged)"
                 )
@@ -942,6 +977,7 @@ contract SyncCcipConfig is Script {
             return;
         }
 
+        string memory json = vm.readFile(projectPath);
         string[] memory laneNames = vm.parseJsonKeys(json, ".lanes");
         string memory lanesObj = string.concat("lanes-rm-", local);
         string memory lanesJson = "{}";
@@ -949,9 +985,9 @@ contract SyncCcipConfig is Script {
             if (keccak256(bytes(laneNames[i])) == keccak256(bytes(remote))) continue;
             lanesJson = vm.serializeString(lanesObj, laneNames[i], _copyLaneEntry(json, laneNames[i]));
         }
-        vm.writeJson(lanesJson, localPath, ".lanes");
+        vm.writeJson(lanesJson, projectPath, ".lanes");
         console.log(
-            string.concat("[remove-lane] removed lane ", local, " -> ", remote, " from config/chains/", local, ".json")
+            string.concat("[remove-lane] removed lane ", local, " -> ", remote, " from project/", local, ".json")
         );
         console.log(
             string.concat(

@@ -46,6 +46,7 @@ contract DeployAdvancedPoolHooks is Script {
         uint256 chainId = block.chainid;
         string memory chainName = helperConfig.getChainName(chainId);
         string memory chainNameId = helperConfig.getNetworkConfig(chainId).chainNameIdentifier;
+        string memory selectorName = helperConfig.getSelectorName(chainId);
 
         console.log("");
         console.log("========================================");
@@ -104,7 +105,7 @@ contract DeployAdvancedPoolHooks is Script {
         // Hooks belong to a token's pool, so the registry key carries the token symbol and pool type
         // (see _hooksDeploymentName). Refuse to redeploy over a live registry entry (FORCE_REDEPLOY
         // overrides). The name is composed in a helper to keep this stack-heavy function under the limit.
-        RegistryWriter.guard(chainId, _hooksDeploymentName(chainId));
+        RegistryWriter.guard(selectorName, _hooksDeploymentName(chainId));
 
         vm.startBroadcast();
 
@@ -142,9 +143,14 @@ contract DeployAdvancedPoolHooks is Script {
         console.log(helperConfig.getExplorerUrl(chainId, "/address/", hooksAddress));
         console.log("");
         // Single writer: one call emits the detailed ledger file AND records the address in the
-        // registry (deployments[{symbol}_{poolType}_PoolHooks] + active.poolHooks).
+        // store (deployments[{symbol}_{poolType}_PoolHooks] + active.poolHooks).
         DeploymentRecorder.recordPoolHooks(
-            vm, chainId, chainNameId, hooksAddress, helperConfig.getDeployedToken(chainId), _hooksPoolType()
+            vm,
+            helperConfig.getSelectorName(chainId),
+            chainNameId,
+            hooksAddress,
+            helperConfig.getDeployedToken(chainId),
+            _hooksPoolType()
         );
         console.log("");
         console.log("Configuration Summary:");

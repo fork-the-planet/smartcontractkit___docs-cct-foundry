@@ -968,12 +968,11 @@ contract AddRemotePoolFenceForkTest is BaseForkTest {
     }
 }
 
-/// @notice Redirect proof for RemoveRemotePool on a 1.5.0 pool. RemoveRemotePool now fences 1.5.0
+/// @notice Redirect proof for RemoveRemotePool on a 1.5.0 pool. RemoveRemotePool fences 1.5.0
 ///         BEFORE the generic `requireSupports` unsupported-operation refusal: 1.5.0 holds exactly
 ///         one remote pool per chain, so there is no standalone pool removal, and the script points
-///         the operator at the whole-lane teardown (RemoveChain.s.sol) instead. This asserts the NEW
-///         redirect message (superseding the old "UnsupportedPoolOperation: removeRemotePool" text)
-///         and that it names RemoveChain.s.sol as the alternative. Still fires before any
+///         the operator at the whole-lane teardown (RemoveChain.s.sol) instead. This asserts the
+///         redirect message names RemoveChain.s.sol as the alternative. It fires before any
 ///         version-shaped read (isRemotePool/getRemotePools, both absent on 1.5.0), so a decode as
 ///         Error(string) proves it is the curated redirect, not a raw EvmError from a missing selector.
 contract RemoveRemotePoolFenceForkTest is BaseForkTest {

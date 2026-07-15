@@ -31,6 +31,7 @@ contract DeployERC20LockBox is Script {
         uint256 chainId = block.chainid;
         string memory chainName = helperConfig.getChainName(chainId);
         string memory chainNameId = helperConfig.getNetworkConfig(chainId).chainNameIdentifier;
+        string memory selectorName = helperConfig.getSelectorName(chainId);
 
         console.log("");
         console.log("========================================");
@@ -65,7 +66,7 @@ contract DeployERC20LockBox is Script {
 
         // Refuse to redeploy over a live registry entry (FORCE_REDEPLOY=true overrides). Keyed on the
         // unique per-symbol deployment name so distinct tokens on one chain never collide.
-        RegistryWriter.guard(chainId, DeploymentRecorder.lockBoxName(DeploymentUtils.getSymbol(vm, tokenAddress)));
+        RegistryWriter.guard(selectorName, DeploymentRecorder.lockBoxName(DeploymentUtils.getSymbol(vm, tokenAddress)));
 
         vm.startBroadcast();
 
@@ -97,7 +98,7 @@ contract DeployERC20LockBox is Script {
         console.log("");
         // Single writer: one call emits the detailed ledger file AND records the address in the
         // registry (deployments[{symbol}_LockBox] + active.lockBox).
-        DeploymentRecorder.recordLockBox(vm, chainId, chainNameId, lockBoxAddress, tokenAddress);
+        DeploymentRecorder.recordLockBox(vm, selectorName, chainNameId, lockBoxAddress, tokenAddress);
         console.log("");
         console.log("The address is registered in the address registry; later scripts resolve it automatically.");
         console.log("Copy this address to use in the next commands:");

@@ -12,7 +12,6 @@
     "tokenAdminRegistry": "0x23a5084Fa78104F3DF11C63Ae59fcac4f6AD9DeE",
     "tokenPoolFactory": "0xd3e461C55676B10634a5F81b747c324B85686Dd1"
   },
-  "ccipBnM": "0xDbB255D37BC7c9e2b08e5a1C9f9506c9E85F1644",
   "chainFamily": "evm",
   "chainId": "16602",
   "chainNameIdentifier": "0G_GALILEO_TESTNET",
@@ -21,7 +20,6 @@
   "displayName": "0g Galileo 1",
   "environment": "testnet",
   "explorerUrl": "https://chainscan-galileo.0g.ai",
-  "lanes": {},
   "name": "0g-testnet-galileo-1",
   "nativeCurrencySymbol": "0G",
   "rpcEnv": "ZERO_G_TESTNET_RPC_URL"

@@ -7,19 +7,26 @@ import {RateLimiter} from "@chainlink/contracts-ccip/contracts/libraries/RateLim
 import {IPoolV2} from "@chainlink/contracts-ccip/contracts/interfaces/IPoolV2.sol";
 import {VerifyChain} from "../../script/config/VerifyChain.s.sol";
 import {BaseForkTest} from "../BaseForkTest.t.sol";
+import {ProjectStore} from "../../src/utils/ProjectStore.sol";
 
-/// @dev Shared scratch-config plumbing for the lanes-rung tests. Every test writes its own
-/// uniquely-named scratch chain file under `config/chains/` (suites run in parallel and share the
-/// filesystem) and overwrites it at the start of the test, so a leftover from an aborted run can
-/// never poison a rerun. Scratch lanes only ever point at scratch remote names, so a leftover
-/// cannot fail the doctor of a committed chain.
+/// @dev Shared scratch-config plumbing for the lanes-rung tests: the scratch chain
+/// CONFIG (pure API/chain facts, NO `lanes`/`roles`/`ccipBnM`) lives under `config/chains/zz-scratch-*`
+/// and the declared `lanes{}` live in the gitignored `project/zz-scratch-*.json`. Every test writes its
+/// own uniquely-named scratch chain (suites run in parallel and share the filesystem) and cleans both
+/// files in setUp() (revert-safe), so a leftover from an aborted run can never poison a rerun. Scratch
+/// lanes only ever point at scratch remote names, so a leftover cannot fail the doctor of a real chain.
 abstract contract LaneReconcileScratch is Test {
     function _path(string memory name) internal pure returns (string memory) {
         return string.concat("config/chains/", name, ".json");
     }
 
-    /// @dev Writes a scratch chain config in the committed shape (all schema keys + `lanes{}`),
-    /// keyed by a fake-but-valid chainId/selector no other test uses.
+    function _projPath(string memory name) internal view returns (string memory) {
+        return ProjectStore.path(name);
+    }
+
+    /// @dev Writes a scratch chain config in the committed shape (all API/chain-fact schema keys —
+    /// NO `lanes`/`roles`/`ccipBnM`, which live in `project/`), keyed by a fake-but-valid
+    /// chainId/selector no other test uses.
     function _writeScratchChain(string memory name, uint256 chainId, uint64 selector) internal {
         string memory obj = string.concat("scratch-", name);
         vm.serializeString(obj, "name", name);
@@ -33,8 +40,6 @@ abstract contract LaneReconcileScratch is Test {
         vm.serializeUint(obj, "confirmations", 2);
         vm.serializeString(obj, "explorerUrl", "https://example.invalid");
         vm.serializeString(obj, "nativeCurrencySymbol", "ZZZ");
-        vm.serializeAddress(obj, "ccipBnM", address(0));
-        vm.serializeString(obj, "lanes", "{}");
         string memory ccipObj = string.concat("scratch-ccip-", name);
         vm.serializeAddress(ccipObj, "router", address(2));
         vm.serializeAddress(ccipObj, "rmnProxy", address(3));
@@ -47,21 +52,25 @@ abstract contract LaneReconcileScratch is Test {
         vm.writeFile(_path(name), vm.serializeString(obj, "ccip", ccipJson));
     }
 
-    /// @dev Deletes leftover scratch files from a prior aborted run. Called from setUp() so cleanup
-    /// happens before every test, not at the end of a happy path a failing assertion would skip -
-    /// a failed run may leave files behind, but the next run always starts (and leaves the tree)
-    /// clean.
+    /// @dev Deletes leftover scratch files (config + project) from a prior aborted run. Called from
+    /// setUp() so cleanup happens before every test, not at the end of a happy path a failing assertion
+    /// would skip - the next run always starts (and leaves the tree) clean.
     function _cleanupScratch(string[] memory names) internal {
         for (uint256 i = 0; i < names.length; i++) {
             string memory p = _path(names[i]);
             if (vm.exists(p)) vm.removeFile(p);
+            string memory proj = _projPath(names[i]);
+            if (vm.exists(proj)) vm.removeFile(proj);
         }
     }
 
-    /// @dev Replaces the scratch chain's `lanes{}` with ONE entry (`remoteName` -> the raw entry
-    /// JSON), composed as a raw string so tests control optional blocks (`inbound{}`, `v2{}`) exactly.
+    /// @dev Declares the scratch chain's `lanes{}` in its PROJECT store (`project/<name>.json`) with ONE
+    /// entry (`remoteName` -> the raw entry JSON), composed as a raw string so tests control optional
+    /// blocks (`inbound{}`, `v2{}`) exactly. Seeds the project skeleton first so the targeted `.lanes`
+    /// write never raw-reverts. This is where the lane SOURCE (`LanePolicySource`) and the doctor read.
     function _declareLane(string memory name, string memory remoteName, string memory laneEntryJson) internal {
-        vm.writeJson(string.concat("{\"", remoteName, "\":", laneEntryJson, "}"), _path(name), ".lanes");
+        ProjectStore.seedIfAbsent(name);
+        vm.writeJson(string.concat("{\"", remoteName, "\":", laneEntryJson, "}"), _projPath(name), ".lanes");
     }
 
     /// @dev A core lane entry (`remoteSelector`/`capacity`/`rate`) with `extraJson` appended verbatim
@@ -95,8 +104,7 @@ contract VerifyChainLaneReconcileForkTest is BaseForkTest, LaneReconcileScratch 
     uint128 internal constant CAPACITY = 1000e18;
     uint128 internal constant RATE = 100e18;
 
-    // Live externally deployed Sepolia fixture: BurnMintTokenPool 1.6.1 with a Mantle Sepolia lane
-    // applied (tests/pool-migration-v1to2/fixtures.json, PR 2.2+P4.0 live validation).
+    // Live externally deployed Sepolia fixture: BurnMintTokenPool 1.6.1 with a Mantle Sepolia lane applied.
     address internal constant LIVE_161_POOL = 0x898ABAA106686F91f783166Abe336E7C7423Ca89;
     uint64 internal constant MANTLE_SELECTOR = 8_236_463_271_206_331_221;
 

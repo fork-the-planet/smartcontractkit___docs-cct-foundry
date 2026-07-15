@@ -28,6 +28,7 @@ contract DeployToken is Script {
 
         uint256 chainId = block.chainid;
         string memory chainName = helperConfig.getChainName(chainId);
+        string memory selectorName = helperConfig.getSelectorName(chainId);
 
         console.log("");
         console.log("========================================");
@@ -45,7 +46,7 @@ contract DeployToken is Script {
 
         // Refuse to redeploy over a live registry entry (FORCE_REDEPLOY=true overrides). Keyed on the
         // unique deployment name so distinct symbols on one chain never collide.
-        RegistryWriter.guard(chainId, DeploymentRecorder.tokenName(tokenConfig.symbol));
+        RegistryWriter.guard(selectorName, DeploymentRecorder.tokenName(tokenConfig.symbol));
 
         vm.startBroadcast();
 
@@ -102,7 +103,7 @@ contract DeployToken is Script {
         console.log("");
         // Single writer: one call emits the detailed ledger file AND records the address in the
         // registry (deployments[{symbol}_Token] + active.token).
-        DeploymentRecorder.recordToken(vm, chainId, chainNameIdentifier, tokenConfig.symbol, tokenAddress);
+        DeploymentRecorder.recordToken(vm, selectorName, chainNameIdentifier, tokenConfig.symbol, tokenAddress);
         console.log("");
         console.log("The address is registered in the address registry; later scripts resolve it automatically.");
         console.log("To override it for a session, set the environment variable:");

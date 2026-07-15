@@ -2,6 +2,8 @@
 pragma solidity 0.8.24;
 
 import {Script} from "forge-std/Script.sol";
+import {VmSafe} from "forge-std/Vm.sol";
+import {console} from "forge-std/console.sol";
 import {ChainConfig} from "../src/config/ChainConfig.sol";
 import {RegistryWriter} from "../src/utils/RegistryWriter.sol";
 
@@ -9,9 +11,10 @@ import {RegistryWriter} from "../src/utils/RegistryWriter.sol";
 /// lives in git-tracked JSON files under `config/chains/` and is read through `ChainConfig` —
 /// supporting a new chain is a config edit, not a Solidity change: the chain LIST itself is
 /// discovered by scanning `config/chains/*.json` once at construction into a storage cache (the
-/// per-chain constants and getters below are kept as fast paths / back-compat API; every lookup
-/// falls back to the discovered-chain cache for chains added after they were written). Deployed contract addresses resolve from environment variables
-/// first, then from the `addresses/<chainId>.json` registry written by the deploy scripts (see
+/// per-chain constants and getters below are kept as fast paths; every lookup falls back to the
+/// discovered-chain cache for chains added after they were written). Deployed contract addresses
+/// resolve from environment variables first, then from the project store
+/// `project/<selectorName>.json` `addresses.active.<role>` written by the deploy scripts (see
 /// `RegistryWriter`).
 contract HelperConfig is Script {
     struct NetworkConfig {
@@ -21,7 +24,6 @@ contract HelperConfig is Script {
         address tokenAdminRegistry;
         address registryModuleOwnerCustom;
         address link;
-        address ccipBnM;
         uint256 confirmations;
         string chainName;
         string chainNameIdentifier;
@@ -37,22 +39,29 @@ contract HelperConfig is Script {
     uint256 public constant INK_SEPOLIA_CHAIN_ID = 763373;
     uint256 public constant MANTLE_SEPOLIA_CHAIN_ID = 5003;
 
-    // Deployed contract addresses
+    // Deployed contract addresses — EVM chains, keyed by chainId (the FROZEN getter surface).
     mapping(uint256 => address) public deployedTokens;
     mapping(uint256 => address) public deployedTokenPools;
     mapping(uint256 => address) public deployedLockBoxes;
     mapping(uint256 => address) public deployedPoolHooks;
 
+    // Non-EVM artifacts, keyed by `<selectorName>:<role>` — every non-EVM chain reports chainId "0",
+    // so the chainId-keyed maps above cannot key them. Values are RAW strings (base58 for Solana) the
+    // project store resolves, so an EVM pool's applyChainUpdates can take a Solana remote from the
+    // store instead of an ephemeral env var. Resolved via `getDeployed*String(selectorName)`.
+    mapping(string => string) private s_deployedString;
+
     // Discovered-chain cache: `config/chains/*.json` is scanned ONCE at construction and every
     // record is kept in storage — the scan fallbacks below never touch the filesystem again.
-    string[] private s_configuredChains; // config names (file basenames), same order as s_chains
+    string[] private s_configuredChains; // config names (file basenames == selectorNames), same order as s_chains
     NetworkConfig[] private s_chains;
     uint256[] private s_chainIds; // declared chainId per entry (0 for non-EVM chains)
 
     constructor() {
         // Discover every configured chain from `config/chains/*.json` — a chain added by
         // `make add-chain` is picked up automatically, no Solidity change — then initialize
-        // deployed contracts (env vars / the address registry) for each EVM chain.
+        // deployed contracts (env vars / the project store) for each chain. Non-EVM chains resolve
+        // too: their base58 artifacts feed applyChainUpdates.
         string[] memory chains = ChainConfig.names();
         for (uint256 i = 0; i < chains.length; i++) {
             (bool ok, ChainConfig.Chain memory c, uint256 chainId) = ChainConfig.tryLoad(chains[i]);
@@ -61,13 +70,19 @@ contract HelperConfig is Script {
             s_chains.push(_toNetworkConfig(c));
             s_chainIds.push(chainId);
             if (chainId != 0) {
-                // non-EVM chains (chainId 0, e.g. Solana) are destination-only: nothing to resolve
-                _initializeDeployedContracts(chainId, c.chainNameIdentifier);
+                _initializeDeployedContracts(chainId, chains[i], c.chainNameIdentifier);
+            } else {
+                _initializeNonEvmArtifacts(chains[i], c.chainNameIdentifier);
             }
         }
+        // Surface an env override that diverges from the store, for the ACTING chain only (its own
+        // resolution just ran above). No-op unless the run is forked to a configured chain, so an
+        // unforked dry-run stays quiet; `warnEnvOverride` is itself silent under `forge test`.
+        (bool acting,) = _findByChainId(block.chainid);
+        if (acting) warnEnvOverride(block.chainid);
     }
 
-    /// @dev Helper to initialize deployed contract addresses.
+    /// @dev Helper to initialize deployed contract addresses (EVM chains, address-typed).
     ///
     /// Resolution order (highest priority first):
     ///   1. Inline short alias — `TOKEN` / `TOKEN_POOL`
@@ -75,17 +90,23 @@ contract HelperConfig is Script {
     ///      `TOKEN=0x... TOKEN_POOL=0x... forge script ...`
     ///   2. Chain-specific var — `{CHAIN}_TOKEN` / `{CHAIN}_TOKEN_POOL`
     ///      Set once per session: `export ETHEREUM_SEPOLIA_TOKEN=0x...`
-    ///   3. Address registry — `addresses/<chainId>.json`, written automatically by the deploy
-    ///      scripts (`token` / `tokenPool` entries). This is the default: after a deploy, later
-    ///      scripts resolve the address with no environment variable at all.
-    function _initializeDeployedContracts(uint256 chainId, string memory chainNameId) private {
+    ///   3. Project store — `project/<selectorName>.json` `addresses.active.<role>`, written
+    ///      automatically by the deploy scripts (and `adopt-token`). This is the default: after a
+    ///      deploy, later scripts resolve the address with no environment variable at all.
+    ///
+    /// An env override wins as-is and is READ-ONLY (it never writes the store back). A broadcasting
+    /// script surfaces the divergence with `warnEnvOverride` — one notice naming both values and the
+    /// `make adopt-token` reconcile command.
+    function _initializeDeployedContracts(uint256 chainId, string memory selectorName, string memory chainNameId)
+        private
+    {
         // Initialize TOKEN contract — inline TOKEN alias takes priority
         address token = vm.envOr("TOKEN", address(0));
         if (token == address(0)) {
             token = vm.envOr(string.concat(chainNameId, "_TOKEN"), address(0));
         }
         if (token == address(0)) {
-            token = RegistryWriter.read(chainId, "token");
+            token = RegistryWriter.read(selectorName, "token");
         }
         deployedTokens[chainId] = token;
 
@@ -95,29 +116,121 @@ contract HelperConfig is Script {
             tokenPool = vm.envOr(string.concat(chainNameId, "_TOKEN_POOL"), address(0));
         }
         if (tokenPool == address(0)) {
-            tokenPool = RegistryWriter.read(chainId, "tokenPool");
+            tokenPool = RegistryWriter.read(selectorName, "tokenPool");
         }
         deployedTokenPools[chainId] = tokenPool;
 
-        // Initialize LOCK_BOX — inline LOCK_BOX alias > {CHAIN}_LOCK_BOX > registry active.lockBox
+        // Initialize LOCK_BOX — inline LOCK_BOX alias > {CHAIN}_LOCK_BOX > store active.lockBox
         address lockBox = vm.envOr("LOCK_BOX", address(0));
         if (lockBox == address(0)) {
             lockBox = vm.envOr(string.concat(chainNameId, "_LOCK_BOX"), address(0));
         }
         if (lockBox == address(0)) {
-            lockBox = RegistryWriter.read(chainId, "lockBox");
+            lockBox = RegistryWriter.read(selectorName, "lockBox");
         }
         deployedLockBoxes[chainId] = lockBox;
 
-        // Initialize POOL_HOOKS — inline POOL_HOOKS alias > {CHAIN}_POOL_HOOKS > registry active.poolHooks
+        // Initialize POOL_HOOKS — inline POOL_HOOKS alias > {CHAIN}_POOL_HOOKS > store active.poolHooks
         address poolHooks = vm.envOr("POOL_HOOKS", address(0));
         if (poolHooks == address(0)) {
             poolHooks = vm.envOr(string.concat(chainNameId, "_POOL_HOOKS"), address(0));
         }
         if (poolHooks == address(0)) {
-            poolHooks = RegistryWriter.read(chainId, "poolHooks");
+            poolHooks = RegistryWriter.read(selectorName, "poolHooks");
         }
         deployedPoolHooks[chainId] = poolHooks;
+    }
+
+    /// @dev Initialize a non-EVM chain's project artifacts (RAW base58 strings), keyed by
+    /// `<selectorName>:<role>`. Non-EVM chains all report chainId "0", so the chainId-keyed maps
+    /// cannot hold them; the selectorName-keyed string cache is the non-EVM resolution surface.
+    /// Ladder: chain-scoped env (`{CHAIN}_TOKEN` / `{CHAIN}_TOKEN_POOL`) > store `active.<role>`.
+    /// (The inline `TOKEN` alias is deliberately NOT applied here: it is a chain-agnostic override
+    /// and would smear one address across every configured chain — a documented footgun.)
+    function _initializeNonEvmArtifacts(string memory selectorName, string memory chainNameId) private {
+        _initNonEvmRole(selectorName, chainNameId, "token", "_TOKEN");
+        _initNonEvmRole(selectorName, chainNameId, "tokenPool", "_TOKEN_POOL");
+    }
+
+    function _initNonEvmRole(
+        string memory selectorName,
+        string memory chainNameId,
+        string memory role,
+        string memory envSuffix
+    ) private {
+        string memory val = vm.envOr(string.concat(chainNameId, envSuffix), string(""));
+        if (bytes(val).length == 0) {
+            val = RegistryWriter.readString(selectorName, role);
+        }
+        s_deployedString[string.concat(selectorName, ":", role)] = val;
+    }
+
+    /// @notice Surface an env override that diverges from the project store, for the ACTING chain.
+    /// When a role (`token`/`tokenPool`/`lockBox`/`poolHooks`) resolves from an env rung whose value
+    /// differs from `project/<selectorName>.json` `addresses.active.<role>`, print ONE notice naming
+    /// both values and the `make adopt-token` reconcile command. The override wins and is READ-ONLY
+    /// (the store is never written back), so this is the only thing that keeps a reviewed store from
+    /// silently drifting under an incident override. Silent when no override is set, when env == store,
+    /// and under `forge test`. Acting chain only (its own `chainId`), so the chain-agnostic inline
+    /// `TOKEN` alias never smears a notice across every configured chain. Broadcasting scripts call
+    /// this once, after resolving their inputs.
+    function warnEnvOverride(uint256 chainId) public view {
+        if (vm.isContext(VmSafe.ForgeContext.TestGroup)) return; // never under forge test
+        if (chainId == 0) return; // broadcasting is EVM-only; non-EVM chains have no acting chainId
+        string memory selectorName = getSelectorName(chainId);
+        string memory chainNameId = getNetworkConfig(chainId).chainNameIdentifier;
+        _warnRoleDivergence(selectorName, chainNameId, "token", "TOKEN");
+        _warnRoleDivergence(selectorName, chainNameId, "tokenPool", "TOKEN_POOL");
+        _warnRoleDivergence(selectorName, chainNameId, "lockBox", "LOCK_BOX");
+        _warnRoleDivergence(selectorName, chainNameId, "poolHooks", "POOL_HOOKS");
+    }
+
+    function _warnRoleDivergence(
+        string memory selectorName,
+        string memory chainNameId,
+        string memory role,
+        string memory envStem
+    ) private view {
+        address envVal = vm.envOr(envStem, address(0));
+        if (envVal == address(0)) envVal = vm.envOr(string.concat(chainNameId, "_", envStem), address(0));
+        string memory notice =
+            composeDivergenceNotice(selectorName, role, envStem, envVal, RegistryWriter.read(selectorName, role));
+        if (bytes(notice).length != 0) console.log(notice);
+    }
+
+    /// @notice The divergence-notice text for one role, or "" when silent. Side-effect free so the four
+    /// resolution states are byte-assertable in a test without env/store setup: `envVal == 0` (no
+    /// override) → ""; `envVal == storeVal` (override matches store) → ""; otherwise (override differs,
+    /// or the store is unset) → a two-line notice naming both values and the exact `make adopt-token`
+    /// reconcile command.
+    function composeDivergenceNotice(
+        string memory selectorName,
+        string memory role,
+        string memory envStem,
+        address envVal,
+        address storeVal
+    ) public view returns (string memory) {
+        if (envVal == address(0) || envVal == storeVal) return "";
+        return string.concat(
+            "NOTICE: ",
+            role,
+            " resolved from env (",
+            vm.toString(envVal),
+            ") but project/",
+            selectorName,
+            ".json addresses.active.",
+            role,
+            " = ",
+            storeVal == address(0) ? "(unset)" : vm.toString(storeVal),
+            "\n        The override wins for this run and is NOT written back. If ",
+            vm.toString(envVal),
+            " is the new truth, reconcile the store: make adopt-token CHAIN=",
+            selectorName,
+            " ",
+            envStem,
+            "=",
+            vm.toString(envVal)
+        );
     }
 
     /// @dev Maps a NetworkConfig from a `config/chains/<name>.json` record.
@@ -133,7 +246,6 @@ contract HelperConfig is Script {
             tokenAdminRegistry: c.tokenAdminRegistry,
             registryModuleOwnerCustom: c.registryModuleOwnerCustom,
             link: c.link,
-            ccipBnM: c.ccipBnM,
             confirmations: c.confirmations,
             chainName: c.chainName,
             chainNameIdentifier: c.chainNameIdentifier,
@@ -141,6 +253,43 @@ contract HelperConfig is Script {
             nativeCurrencySymbol: c.nativeCurrencySymbol,
             chainFamily: c.chainFamily
         });
+    }
+
+    /// @notice Resolves an EVM `chainId` to its canonical **selectorName** (the `config/chains/`
+    /// basename == the project-store basename). The chainId→selectorName resolver that keeps the
+    /// frozen `getNetworkConfig(chainId)` surface while the store keys by selectorName. Reverts for a
+    /// non-EVM chainId (`0` is shared by every non-EVM chain and cannot resolve to one name — resolve
+    /// those by selectorName directly).
+    function getSelectorName(uint256 chainId) public view returns (string memory) {
+        require(chainId != 0, "getSelectorName: non-EVM chains share chainId 0 - resolve by selectorName");
+        for (uint256 i = 0; i < s_chainIds.length; i++) {
+            if (s_chainIds[i] == chainId) return s_configuredChains[i];
+        }
+        revert("Unsupported chain ID");
+    }
+
+    /// @notice Resolves a chainSelector to its selectorName (the config basename == project-store
+    /// basename). Works for every family (non-EVM chains share chainId 0 but have unique selectors),
+    /// so it is the join key for resolving a non-EVM remote's stored artifacts. "" when no config
+    /// declares the selector.
+    function getSelectorNameBySelector(uint64 chainSelector) public view returns (string memory) {
+        for (uint256 i = 0; i < s_chains.length; i++) {
+            if (s_chains[i].chainSelector == chainSelector) return s_configuredChains[i];
+        }
+        return "";
+    }
+
+    /// @notice Resolves a non-EVM chain's active `token` artifact as a RAW string (base58 for Solana)
+    /// via the selectorName-keyed cache (chain-scoped env > store). Empty when unresolved. This is the
+    /// non-EVM resolution surface the frozen chainId-keyed `getDeployedToken` cannot serve.
+    function getDeployedTokenString(string memory selectorName) public view returns (string memory) {
+        return s_deployedString[string.concat(selectorName, ":token")];
+    }
+
+    /// @notice Resolves a non-EVM chain's active `tokenPool` artifact as a RAW string (base58 for
+    /// Solana) via the selectorName-keyed cache (chain-scoped env > store). Empty when unresolved.
+    function getDeployedTokenPoolString(string memory selectorName) public view returns (string memory) {
+        return s_deployedString[string.concat(selectorName, ":tokenPool")];
     }
 
     function getEthereumSepoliaConfig() public view returns (NetworkConfig memory) {

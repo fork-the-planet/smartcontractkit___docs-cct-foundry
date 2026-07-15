@@ -68,3 +68,31 @@ jobs:
           version: ${{ env.FOUNDRY_VERSION }}
       - run: npm ci
       - run: forge test -vv
+
+  # The offline partition of the chain-config tooling suite: guards, make-arg preflights, the
+  # local-fixture-server sync, the canonical-format checks, and the committed-tree gates (git
+  # ls-files, the gitignore contract, the secret-shaped-value lint, the config-purity grep). It
+  # reaches no live CCIP API, so it is deterministic and blocks PRs. The live partition (selector
+  # and drift resolution against the real API) runs on a schedule in config-drift.yml.
+  tooling-offline:
+    name: config-tooling (offline)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a # v1.9.0
+        with:
+          version: ${{ env.FOUNDRY_VERSION }}
+      - run: npm ci
+      - name: test-tooling.sh (offline partition)
+        run: TOOLING_PARTITION=offline bash script/config/test-tooling.sh
+      # Every committed config/chains + project file must already be in its exact canonical form
+      # (config: jq -S + trailing newline; project: jq -S, no trailing newline). A hand edit in the
+      # wrong form otherwise surfaces later as a phantom diff on the next sync/deploy.
+      - name: canonical form (fmt-config is a no-op on a clean tree)
+        run: |
+          make fmt-config
+          git diff --exit-code -- config/chains project

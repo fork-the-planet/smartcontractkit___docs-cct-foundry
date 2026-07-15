@@ -189,7 +189,7 @@ contract UpdateTokenTransferFeeConfigLaneSourceTest is LaneReconcileScratch {
         assertEq(
             res.editHintText,
             string.concat(
-                unicode"⚠️  Applied fee config is not declared in lanes.zz-scratch-feesrc-r1.v2.feeConfig (config/chains/",
+                unicode"⚠️  Applied fee config is not declared in lanes.zz-scratch-feesrc-r1.v2.feeConfig (project/",
                 local,
                 ".json). Hand-edit the block to the applied values: destGasOverhead=",
                 vm.toString(ENV_VALUES[0]),
@@ -231,7 +231,7 @@ contract UpdateTokenTransferFeeConfigLaneSourceTest is LaneReconcileScratch {
         vm.removeFile(_path(local));
     }
 
-    // All six env vars + a DIVERGING declared block: env wins byte-for-byte, every field flags its
+    // All six env vars + a DIVERGING declared block: env wins, every field flags its
     // divergence, hint armed.
     function test_EnvAndBlockDiverge_EnvWins_DivergenceAndHint() public {
         string memory local = _localChain(3);
@@ -257,7 +257,7 @@ contract UpdateTokenTransferFeeConfigLaneSourceTest is LaneReconcileScratch {
                 vm.toString(ENV_VALUES[0]),
                 " diverges from declared lanes.zz-scratch-feesrc-remote3.v2.feeConfig.destGasOverhead=",
                 vm.toString(LANE_VALUES[0]),
-                " in config/chains/",
+                " in project/",
                 local,
                 ".json - make doctor will WARN until reconciled"
             ),
@@ -356,8 +356,8 @@ contract UpdateTokenTransferFeeConfigLaneSourceTest is LaneReconcileScratch {
     // Rung 3: neither env vars nor a declared block
     // ─────────────────────────────────────────────────────────────────────────
 
-    // The historical default stands byte-for-byte: every field keeps the current on-chain value
-    // (zero when no config is stored yet) and nothing hints — the exact pre-existing
+    // The default stands: every field keeps the current on-chain value
+    // (zero when no config is stored yet) and nothing hints — the
     // `vm.envOr(name, current)` semantics.
     function test_NoEnv_NoBlock_CurrentOnChainDefaults_NoHint() public {
         string memory local = _localChain(8);

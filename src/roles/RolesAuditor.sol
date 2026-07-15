@@ -5,9 +5,10 @@ import {Vm} from "forge-std/Vm.sol";
 import {console} from "forge-std/console.sol";
 
 import {RolesProbes} from "./RolesProbes.sol";
+import {ProjectStore} from "../utils/ProjectStore.sol";
 
 /// @title RolesAuditor
-/// @notice Reconciles the DECLARED authority surface (`roles{}` in `config/chains/<name>.json`) against
+/// @notice Reconciles the DECLARED authority surface (`roles{}` in `project/<selectorName>.json`) against
 /// the live chain (the active fork must be the chain itself). One aligned [PASS]/[FAIL]/[WARN]/[SKIP]
 /// line per field — the same doctor style as `VerifyChain`, which mounts this as its ROLES rung;
 /// `make roles-check` runs it standalone through the exit-code wrapper (`script/config/roles-check.sh`).
@@ -41,9 +42,10 @@ contract RolesAuditor {
 
     Result private r;
 
-    /// @notice Audit `name` using its on-disk config (the common path).
+    /// @notice Audit `name` using its on-disk project store (the common path).
     function audit(string memory name) external returns (Result memory) {
-        return this.auditJson(name, VM.readFile(string.concat("config/chains/", name, ".json")));
+        ProjectStore.requireSchema(name); // named error on a wrong-schema/corrupt file, not a raw revert
+        return this.auditJson(name, VM.readFile(ProjectStore.path(name)));
     }
 
     /// @notice Audit against an EXPLICIT config JSON (lets tests reconcile a mutated declared state

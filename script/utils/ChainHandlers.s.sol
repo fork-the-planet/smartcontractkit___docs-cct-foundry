@@ -171,7 +171,7 @@ library ChainHandlers {
     ///      or type(uint8).max (255) for characters not in the alphabet.
     ///
     ///      Alphabet: 123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz
-    ///      Notably absent: 0 (zero), I (capital i), O (capital o), l (lowercase L).
+    ///      Absent: 0 (zero), I (capital i), O (capital o), l (lowercase L).
     function _base58CharValue(bytes1 c) private pure returns (uint8) {
         uint8 ch = uint8(c);
         if (ch >= 49 && ch <= 57) return ch - 49; // '1'-'9' →  0- 8

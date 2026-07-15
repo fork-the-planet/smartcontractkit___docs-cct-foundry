@@ -41,7 +41,7 @@ import {EoaExecutor} from "../../../src/base/EoaExecutor.s.sol";
 ///
 /// Ladder (PER ARRAY and for the threshold): env var > declared `lanes.<remote>.v2.ccv.<field>` /
 /// chain-level `ccvThreshold` > the current on-chain value. An env value present (even empty, `=""`)
-/// wins byte-for-byte; an env value that diverges (as a SET, order-insensitive) from the declaration
+/// wins; an env value that diverges (as a SET, order-insensitive) from the declaration
 /// prints a one-line notice and a closing hand-edit hint, and `make doctor` WARNs until reconciled
 /// (`v2.ccv` has no add-lane flag — reconcile by a reviewed hand edit). lanes{} is owner intent: an
 /// env-driven apply never writes it back.
@@ -281,8 +281,10 @@ contract UpdateCCVConfig is EoaExecutor, LanePolicySource {
         string[NUM_CCV_FIELDS] memory envNames = _ccvEnvNames();
         string[NUM_CCV_FIELDS] memory fieldNames = _ccvFieldNames();
 
-        string memory json;
-        (res.configFound, res.configName, json) = _findLocalChainConfig();
+        // lanes{} (per-lane v2.ccv) from the project store; ccvThreshold (chain-level) from config.
+        string memory configJson;
+        (res.configFound, res.configName, configJson) = _findLocalChainConfig();
+        string memory json = _localProjectJson(res.configName);
         if (res.configFound && bytes(destChainName).length > 0) {
             (res.laneFound, res.laneKey) = _findLaneKey(json, destChainName, destChainSelector);
         }
@@ -293,7 +295,7 @@ contract UpdateCCVConfig is EoaExecutor, LanePolicySource {
         for (uint256 i = 0; i < NUM_CCV_FIELDS; i++) {
             _resolveArray(res, json, blockPath, envNames[i], fieldNames[i], currentValues[i], i);
         }
-        _resolveThreshold(res, json, currentThreshold);
+        _resolveThreshold(res, configJson, currentThreshold);
 
         res.editHint = res.anyArrayEnv && res.configFound && (!res.blockDeclared || _anyArrayDiverges(res));
 
@@ -372,7 +374,7 @@ contract UpdateCCVConfig is EoaExecutor, LanePolicySource {
                 string.concat(
                     "CCV arrays resolved from lanes.",
                     res.laneKey,
-                    ".v2.ccv in config/chains/",
+                    ".v2.ccv in project/",
                     res.configName,
                     ".json (undeclared arrays keep the current on-chain values)"
                 )
@@ -430,7 +432,7 @@ contract UpdateCCVConfig is EoaExecutor, LanePolicySource {
             _ccvFieldNames()[i],
             "=",
             _addrArrayToString(res.fields[i].declaredValue),
-            " in config/chains/",
+            " in project/",
             res.configName,
             ".json - make doctor will WARN until reconciled"
         );
@@ -460,7 +462,7 @@ contract UpdateCCVConfig is EoaExecutor, LanePolicySource {
             res.blockDeclared ? "diverging from" : "not declared in",
             " lanes.",
             res.laneKey,
-            ".v2.ccv (config/chains/",
+            ".v2.ccv (project/",
             res.configName,
             ".json). Hand-edit the block to the applied values: ",
             values,
