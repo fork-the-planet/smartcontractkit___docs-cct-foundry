@@ -45,7 +45,6 @@ contract DeployAdvancedPoolHooks is Script {
 
         uint256 chainId = block.chainid;
         string memory chainName = helperConfig.getChainName(chainId);
-        string memory chainNameId = helperConfig.getNetworkConfig(chainId).chainNameIdentifier;
         string memory selectorName = helperConfig.getSelectorName(chainId);
 
         console.log("");
@@ -118,16 +117,13 @@ contract DeployAdvancedPoolHooks is Script {
 
         vm.stopBroadcast();
 
-        _recordAndReport(
-            chainId, chainNameId, chainName, hooksAddress, allowlist, thresholdAmount, policyEngine, authorizedCallers
-        );
+        _recordAndReport(chainId, chainName, hooksAddress, allowlist, thresholdAmount, policyEngine, authorizedCallers);
     }
 
     /// @dev Post-deploy: the single-writer registry+ledger record and the human-readable summary.
     /// Split off `run()` so its locals do not add to that stack-heavy function.
     function _recordAndReport(
         uint256 chainId,
-        string memory chainNameId,
         string memory chainName,
         address hooksAddress,
         address[] memory allowlist,
@@ -147,7 +143,6 @@ contract DeployAdvancedPoolHooks is Script {
         DeploymentRecorder.recordPoolHooks(
             vm,
             helperConfig.getSelectorName(chainId),
-            chainNameId,
             hooksAddress,
             helperConfig.getDeployedToken(chainId),
             _hooksPoolType()

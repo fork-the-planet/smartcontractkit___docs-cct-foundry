@@ -97,7 +97,6 @@ library DeploymentRecorder {
     function recordPoolHooks(
         Vm vm,
         string memory selectorName,
-        string memory chainNameIdentifier,
         address hooksAddress,
         address tokenAddress,
         string memory poolType

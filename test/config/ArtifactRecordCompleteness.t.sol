@@ -153,7 +153,6 @@ contract ArtifactRecordCompletenessTest is Test {
 
     function test_PoolHooks_StoreAndHistory() public {
         vm.warp(T1);
-        address token = address(new SymToken("ACE-T"));
         address hooks = address(0x40c5000000000000000000000000000000000005);
         string memory name = DeploymentRecorder.hooksName("ACE-T", "BurnMint");
 

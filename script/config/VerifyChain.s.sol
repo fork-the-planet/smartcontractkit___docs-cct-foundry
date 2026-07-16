@@ -242,7 +242,7 @@ contract VerifyChain is Script {
     /// project store is a NORMAL state, and `vm.keyExistsJson("", …)` REVERTS ("EOF while parsing")
     /// whereas `vm.keyExistsJson("{}", …)` correctly returns false — so every downstream lanes/roles key
     /// probe reads an absent store as "no lanes/roles" without a raw parse revert.
-    function _readProject(string memory name) private returns (string memory) {
+    function _readProject(string memory name) private view returns (string memory) {
         string memory p = ProjectStore.path(name);
         if (!vm.exists(p)) return "{}";
         try probe.readFileFor(p) returns (string memory data) {
@@ -878,7 +878,7 @@ contract VerifyChain is Script {
     /// routine check does not silently skip a grouped token. Fires only when `project/<g>/<name>.json`
     /// exists in some group directory; a single-group clone (no group dirs) prints nothing, so the
     /// one-token output is unchanged.
-    function _noticeGroupedSiblings(string memory name) private {
+    function _noticeGroupedSiblings(string memory name) private view {
         string memory groups = _groupedSiblings(name);
         if (bytes(groups).length != 0) {
             console.log(

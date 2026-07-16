@@ -6,7 +6,6 @@ import {SyncCcipConfig} from "../../script/config/SyncCcipConfig.s.sol";
 import {VerifyChain} from "../../script/config/VerifyChain.s.sol";
 import {IConfigSource} from "../../src/config/IConfigSource.sol";
 import {ProjectStore} from "../../src/utils/ProjectStore.sol";
-import {ProjectScratch} from "../utils/ProjectScratch.sol";
 
 /// @dev Offline stand-in for `CcipApiSource` behind the `IConfigSource` seam: returns a pre-built
 /// flat JSON (the shape `ccip-config-source.sh` emits) so a real `SyncCcipConfig.run` can execute
