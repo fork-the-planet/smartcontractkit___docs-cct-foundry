@@ -6,12 +6,14 @@ import {console} from "forge-std/console.sol";
 
 import {ChainConfig} from "../../src/config/ChainConfig.sol";
 import {RegistryWriter} from "../../src/utils/RegistryWriter.sol";
+import {ProjectStore} from "../../src/utils/ProjectStore.sol";
 import {RolesProbes} from "../../src/roles/RolesProbes.sol";
 
 /// @title VerifyRoles
 /// @notice **The privileged-role audit reader (read-only)** — prints the CURRENT holder of every
-/// authority slot for a token / pool / lockbox / hooks set, resolved from `config/chains/<name>.json`
-/// (+ `TOKEN`/`TOKEN_POOL` env overrides). Nothing broadcasts and no file is written; this is the
+/// authority slot for a token / pool / lockbox / hooks set. The token/pool resolve from the project
+/// store `project/<selectorName>.json` (+ `TOKEN`/`TOKEN_POOL` env overrides); the directory TAR from
+/// `config/chains/<name>.json`. Nothing broadcasts and no file is written; this is the
 /// human-readable companion to `make roles-check` (which reconciles the declared `roles{}` against
 /// the chain and exits 0/1/2). Use it during a handoff to eyeball the before/after holders, or for a
 /// standalone audit of who holds what right now.
@@ -37,11 +39,17 @@ contract VerifyRoles is Script {
     }
 
     function _resolve(string memory chainName) private view returns (address token, address pool) {
-        ChainConfig.Chain memory c = ChainConfig.load(chainName);
-        token = vm.envOr("TOKEN", RegistryWriter.read(c.chainSelector == 0 ? 0 : block.chainid, "token"));
-        pool = vm.envOr("TOKEN_POOL", RegistryWriter.read(block.chainid, "tokenPool"));
-        require(token != address(0), "no token: set TOKEN=<addr> or deploy first (addresses/<chainId>.json)");
-        require(pool != address(0), "no pool: set TOKEN_POOL=<addr> or deploy first (addresses/<chainId>.json)");
+        // chainName IS the selectorName (the config/chains basename == the project-store basename).
+        token = vm.envOr("TOKEN", RegistryWriter.read(chainName, "token"));
+        pool = vm.envOr("TOKEN_POOL", RegistryWriter.read(chainName, "tokenPool"));
+        require(
+            token != address(0),
+            string.concat("no token: set TOKEN=<addr> or deploy first (", ProjectStore.display(chainName), ")")
+        );
+        require(
+            pool != address(0),
+            string.concat("no pool: set TOKEN_POOL=<addr> or deploy first (", ProjectStore.display(chainName), ")")
+        );
     }
 
     // ---------------------------------------------------------------- token (template-dispatched)

@@ -107,7 +107,10 @@ library RolesProbes {
     /// @notice Parse a declared `roles.token.type`; reverts on an unknown name so a typo in the
     /// declaration is a config error, never a silent BYO downgrade.
     function templateFromName(string memory name) internal pure returns (TokenTemplate) {
-        bytes32 h = keccak256(bytes(name));
+        bytes32 h;
+        assembly {
+            h := keccak256(add(name, 0x20), mload(name))
+        }
         if (h == keccak256(bytes("crosschain"))) return TokenTemplate.CrossChainToken;
         if (h == keccak256(bytes("burnmint"))) return TokenTemplate.BurnMintERC20;
         if (h == keccak256(bytes("factory"))) return TokenTemplate.FactoryBurnMintERC20;

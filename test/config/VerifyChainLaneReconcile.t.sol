@@ -7,19 +7,26 @@ import {RateLimiter} from "@chainlink/contracts-ccip/contracts/libraries/RateLim
 import {IPoolV2} from "@chainlink/contracts-ccip/contracts/interfaces/IPoolV2.sol";
 import {VerifyChain} from "../../script/config/VerifyChain.s.sol";
 import {BaseForkTest} from "../BaseForkTest.t.sol";
+import {ProjectStore} from "../../src/utils/ProjectStore.sol";
 
-/// @dev Shared scratch-config plumbing for the lanes-rung tests. Every test writes its own
-/// uniquely-named scratch chain file under `config/chains/` (suites run in parallel and share the
-/// filesystem) and overwrites it at the start of the test, so a leftover from an aborted run can
-/// never poison a rerun. Scratch lanes only ever point at scratch remote names, so a leftover
-/// cannot fail the doctor of a committed chain.
+/// @dev Shared scratch-config plumbing for the lanes-rung tests: the scratch chain
+/// CONFIG (pure API/chain facts, NO `lanes`/`roles`/`ccipBnM`) lives under `config/chains/zz-scratch-*`
+/// and the declared `lanes{}` live in the gitignored `project/zz-scratch-*.json`. Every test writes its
+/// own uniquely-named scratch chain (suites run in parallel and share the filesystem) and cleans both
+/// files in setUp() (revert-safe), so a leftover from an aborted run can never poison a rerun. Scratch
+/// lanes only ever point at scratch remote names, so a leftover cannot fail the doctor of a real chain.
 abstract contract LaneReconcileScratch is Test {
     function _path(string memory name) internal pure returns (string memory) {
         return string.concat("config/chains/", name, ".json");
     }
 
-    /// @dev Writes a scratch chain config in the committed shape (all schema keys + `lanes{}`),
-    /// keyed by a fake-but-valid chainId/selector no other test uses.
+    function _projPath(string memory name) internal view returns (string memory) {
+        return ProjectStore.path(name);
+    }
+
+    /// @dev Writes a scratch chain config in the committed shape (all API/chain-fact schema keys —
+    /// NO `lanes`/`roles`/`ccipBnM`, which live in `project/`), keyed by a fake-but-valid
+    /// chainId/selector no other test uses.
     function _writeScratchChain(string memory name, uint256 chainId, uint64 selector) internal {
         string memory obj = string.concat("scratch-", name);
         vm.serializeString(obj, "name", name);
@@ -33,8 +40,6 @@ abstract contract LaneReconcileScratch is Test {
         vm.serializeUint(obj, "confirmations", 2);
         vm.serializeString(obj, "explorerUrl", "https://example.invalid");
         vm.serializeString(obj, "nativeCurrencySymbol", "ZZZ");
-        vm.serializeAddress(obj, "ccipBnM", address(0));
-        vm.serializeString(obj, "lanes", "{}");
         string memory ccipObj = string.concat("scratch-ccip-", name);
         vm.serializeAddress(ccipObj, "router", address(2));
         vm.serializeAddress(ccipObj, "rmnProxy", address(3));
@@ -47,21 +52,32 @@ abstract contract LaneReconcileScratch is Test {
         vm.writeFile(_path(name), vm.serializeString(obj, "ccip", ccipJson));
     }
 
-    /// @dev Deletes leftover scratch files from a prior aborted run. Called from setUp() so cleanup
-    /// happens before every test, not at the end of a happy path a failing assertion would skip -
-    /// a failed run may leave files behind, but the next run always starts (and leaves the tree)
-    /// clean.
+    /// @dev Deletes leftover scratch files (config + project) from a prior aborted run. Called from
+    /// setUp() so cleanup happens before every test, not at the end of a happy path a failing assertion
+    /// would skip - the next run always starts (and leaves the tree) clean.
     function _cleanupScratch(string[] memory names) internal {
         for (uint256 i = 0; i < names.length; i++) {
-            string memory p = _path(names[i]);
-            if (vm.exists(p)) vm.removeFile(p);
+            _cleanupScratchOne(names[i]);
         }
     }
 
-    /// @dev Replaces the scratch chain's `lanes{}` with ONE entry (`remoteName` -> the raw entry
-    /// JSON), composed as a raw string so tests control optional blocks (`inbound{}`, `v2{}`) exactly.
+    /// @dev Single-name variant for end-of-test cleanup: a test removes ONLY the fixtures it owns.
+    /// Suite siblings run in parallel, so a suite-wide sweep at end-of-test would delete a running
+    /// sibling's files; the setUp() sweep stays the revert-safe guarantee.
+    function _cleanupScratchOne(string memory name) internal {
+        string memory p = _path(name);
+        if (vm.exists(p)) vm.removeFile(p);
+        string memory proj = _projPath(name);
+        if (vm.exists(proj)) vm.removeFile(proj);
+    }
+
+    /// @dev Declares the scratch chain's `lanes{}` in its PROJECT store (`project/<name>.json`) with ONE
+    /// entry (`remoteName` -> the raw entry JSON), composed as a raw string so tests control optional
+    /// blocks (`inbound{}`, `v2{}`) exactly. Seeds the project skeleton first so the targeted `.lanes`
+    /// write never raw-reverts. This is where the lane SOURCE (`LanePolicySource`) and the doctor read.
     function _declareLane(string memory name, string memory remoteName, string memory laneEntryJson) internal {
-        vm.writeJson(string.concat("{\"", remoteName, "\":", laneEntryJson, "}"), _path(name), ".lanes");
+        ProjectStore.seedIfAbsent(name);
+        vm.writeJson(string.concat("{\"", remoteName, "\":", laneEntryJson, "}"), _projPath(name), ".lanes");
     }
 
     /// @dev A core lane entry (`remoteSelector`/`capacity`/`rate`) with `extraJson` appended verbatim
@@ -95,8 +111,7 @@ contract VerifyChainLaneReconcileForkTest is BaseForkTest, LaneReconcileScratch 
     uint128 internal constant CAPACITY = 1000e18;
     uint128 internal constant RATE = 100e18;
 
-    // Live externally deployed Sepolia fixture: BurnMintTokenPool 1.6.1 with a Mantle Sepolia lane
-    // applied (tests/pool-migration-v1to2/fixtures.json, PR 2.2+P4.0 live validation).
+    // Live externally deployed Sepolia fixture: BurnMintTokenPool 1.6.1 with a Mantle Sepolia lane applied.
     address internal constant LIVE_161_POOL = 0x898ABAA106686F91f783166Abe336E7C7423Ca89;
     uint64 internal constant MANTLE_SELECTOR = 8_236_463_271_206_331_221;
 
@@ -105,6 +120,16 @@ contract VerifyChainLaneReconcileForkTest is BaseForkTest, LaneReconcileScratch 
 
     function setUp() public override {
         super.setUp();
+        _clean();
+        (, pool) = deployTokenAndPoolFixture();
+        deployer = _scriptBroadcaster();
+    }
+
+    /// @dev Sweeps this suite's scratch fixtures from setUp(): the revert-safe guarantee (a failed
+    /// test leaves its fixtures for inspection until the next run). Each test additionally removes
+    /// ONLY the fixtures it owns at the end of its body (suite siblings run in parallel), so a green
+    /// run leaves no residue.
+    function _clean() private {
         string[] memory names = new string[](9);
         names[0] = "zz-scratch-lanechk-a1";
         names[1] = "zz-scratch-lanechk-a2";
@@ -116,8 +141,6 @@ contract VerifyChainLaneReconcileForkTest is BaseForkTest, LaneReconcileScratch 
         names[7] = "zz-scratch-lanechk-a8";
         names[8] = "zz-scratch-lanechk-a9";
         _cleanupScratch(names);
-        (, pool) = deployTokenAndPoolFixture();
-        deployer = _scriptBroadcaster();
     }
 
     /// @dev Applies the scratch lane on the fixture pool with the given standard buckets.
@@ -162,7 +185,7 @@ contract VerifyChainLaneReconcileForkTest is BaseForkTest, LaneReconcileScratch 
         assertEq(fails, 0, "match must never FAIL");
         assertEq(warns, 0, "match must not WARN (undeclared inbound/v2 blocks are not reconciled)");
 
-        vm.removeFile(_path(name));
+        _cleanupScratchOne(name);
     }
 
     // WARN: declared but not applied on-chain.
@@ -175,7 +198,7 @@ contract VerifyChainLaneReconcileForkTest is BaseForkTest, LaneReconcileScratch 
         assertEq(fails, 0, "an unapplied lane must never FAIL");
         assertEq(warns, 1, "an unapplied lane must emit exactly one WARN");
 
-        vm.removeFile(_path(name));
+        _cleanupScratchOne(name);
     }
 
     // WARN: applied, but the live outbound bucket drifted from the declared policy.
@@ -189,7 +212,7 @@ contract VerifyChainLaneReconcileForkTest is BaseForkTest, LaneReconcileScratch 
         assertEq(fails, 0, "rate-limit drift must never FAIL (may be a deliberate throttle)");
         assertEq(warns, 1, "rate-limit drift must emit exactly one WARN");
 
-        vm.removeFile(_path(name));
+        _cleanupScratchOne(name);
     }
 
     // WARN: the pool supports a selector on-chain that lanes{} does not declare.
@@ -202,7 +225,7 @@ contract VerifyChainLaneReconcileForkTest is BaseForkTest, LaneReconcileScratch 
         assertEq(fails, 0, "an undeclared on-chain lane must never FAIL");
         assertEq(warns, 1, "an undeclared on-chain lane must emit exactly one WARN");
 
-        vm.removeFile(_path(name));
+        _cleanupScratchOne(name);
     }
 
     // SKIP: no pool recorded in the registry - nothing to reconcile, no WARN, no FAIL.
@@ -215,7 +238,7 @@ contract VerifyChainLaneReconcileForkTest is BaseForkTest, LaneReconcileScratch 
         assertEq(fails, 0, "no-pool must never FAIL");
         assertEq(warns, 0, "no-pool is a SKIP, not a WARN");
 
-        vm.removeFile(_path(name));
+        _cleanupScratchOne(name);
     }
 
     // Declared inbound block: reconciled when matching, one WARN when drifting.
@@ -247,7 +270,7 @@ contract VerifyChainLaneReconcileForkTest is BaseForkTest, LaneReconcileScratch 
         assertEq(fails, 0, "inbound drift must never FAIL");
         assertEq(warns, 1, "inbound drift must emit exactly one WARN");
 
-        vm.removeFile(_path(name));
+        _cleanupScratchOne(name);
     }
 
     // Declared v2.fastFinality buckets on the 2.0.0 pool: reconciled when matching, WARN on drift.
@@ -278,7 +301,7 @@ contract VerifyChainLaneReconcileForkTest is BaseForkTest, LaneReconcileScratch 
         assertEq(fails, 0, "fast-finality drift must never FAIL");
         assertEq(warns, 1, "fast-finality outbound drift must emit exactly one WARN");
 
-        vm.removeFile(_path(name));
+        _cleanupScratchOne(name);
     }
 
     // Declared v2.feeConfig on the 2.0.0 pool: reconciled per field; WARN when undeclared on-chain.
@@ -307,7 +330,7 @@ contract VerifyChainLaneReconcileForkTest is BaseForkTest, LaneReconcileScratch 
         assertEq(fails, 0, "fee-config drift must never FAIL");
         assertEq(warns, 1, "one drifted fee-config field must emit exactly one WARN");
 
-        vm.removeFile(_path(name));
+        _cleanupScratchOne(name);
     }
 
     // Live externally deployed 1.6.1 pool (v1 getter surface): the rung must reconcile it through
@@ -322,7 +345,7 @@ contract VerifyChainLaneReconcileForkTest is BaseForkTest, LaneReconcileScratch 
         (uint256 fails,) = new VerifyChain().checkLanesOnChainForTest(name, LIVE_161_POOL);
         assertEq(fails, 0, "the lanes rung must never FAIL on a live externally deployed pool");
 
-        vm.removeFile(_path(name));
+        _cleanupScratchOne(name);
     }
 
     function _setFastFinality(RateLimiter.Config memory outbound, RateLimiter.Config memory inbound) internal {
@@ -460,6 +483,14 @@ contract VerifyChainLaneReconcileMockTest is LaneReconcileScratch {
     uint128 internal constant RATE = 100e18;
 
     function setUp() public {
+        _clean();
+    }
+
+    /// @dev Sweeps this suite's scratch fixtures from setUp(): the revert-safe guarantee (a failed
+    /// test leaves its fixtures for inspection until the next run). Each test additionally removes
+    /// ONLY the fixtures it owns at the end of its body (suite siblings run in parallel), so a green
+    /// run leaves no residue.
+    function _clean() private {
         string[] memory names = new string[](5);
         names[0] = "zz-scratch-lanechk-m1";
         names[1] = "zz-scratch-lanechk-m2";
@@ -498,7 +529,7 @@ contract VerifyChainLaneReconcileMockTest is LaneReconcileScratch {
         assertEq(fails, 0, "1.5.0 reconcile must never FAIL");
         assertEq(warns, 0, "matching 1.5.0 lane must not WARN (v1 getters dispatched)");
 
-        vm.removeFile(_path(name));
+        _cleanupScratchOne(name);
     }
 
     // A declared v2{} block against a 1.5.0 pool is a version-mismatch WARN, not a read attempt
@@ -517,7 +548,7 @@ contract VerifyChainLaneReconcileMockTest is LaneReconcileScratch {
         assertEq(fails, 0, "a v2 block on a pre-2.0.0 pool must never FAIL");
         assertEq(warns, 1, "a v2 block on a pre-2.0.0 pool must emit exactly one WARN");
 
-        vm.removeFile(_path(name));
+        _cleanupScratchOne(name);
     }
 
     // An unrecognized typeAndVersion: one best-effort WARN, then reads degrade (v2 getter first,
@@ -534,7 +565,7 @@ contract VerifyChainLaneReconcileMockTest is LaneReconcileScratch {
         assertEq(fails, 0, "an unrecognized pool version must never FAIL a read path");
         assertEq(warns, 1, "exactly one WARN (the unknown-version notice); the reads still reconcile");
 
-        vm.removeFile(_path(name));
+        _cleanupScratchOne(name);
     }
 
     // The other half of the UNKNOWN reads-degrade ladder: an uncataloged typeAndVersion over a pool
@@ -562,7 +593,7 @@ contract VerifyChainLaneReconcileMockTest is LaneReconcileScratch {
         assertEq(fails, 0, "drift under an unrecognized version must stay WARN-only");
         assertEq(warns, 2, "unknown-version WARN + outbound drift WARN: the v2 getter's values were read");
 
-        vm.removeFile(_path(name));
+        _cleanupScratchOne(name);
     }
 
     // The totally-quiet baseline: an EMPTY lanes{} declaration against a pool with ZERO on-chain
@@ -580,6 +611,6 @@ contract VerifyChainLaneReconcileMockTest is LaneReconcileScratch {
         assertEq(fails, 0, "empty lanes{} vs zero on-chain lanes must not FAIL");
         assertEq(warns, 0, "empty lanes{} vs zero on-chain lanes must not WARN (totally quiet baseline)");
 
-        vm.removeFile(_path(name));
+        _cleanupScratchOne(name);
     }
 }

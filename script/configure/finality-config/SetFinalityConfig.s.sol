@@ -353,8 +353,9 @@ contract SetFinalityConfig is EoaExecutor, LanePolicySource {
         string memory destChainName,
         uint64 destChainSelector
     ) internal view returns (FastFinalityRlDivergence memory res) {
-        string memory json;
-        (res.configFound, res.configName, json) = _findLocalChainConfig();
+        // Chain existence + name from config/chains; the lanes{} policy from the project store.
+        (res.configFound, res.configName,) = _findLocalChainConfig();
+        string memory json = _localProjectJson(res.configName);
         if (res.configFound) (res.laneFound, res.laneKey) = _findLaneKey(json, destChainName, destChainSelector);
         if (!res.laneFound) {
             res.laneKey = _remoteConfigName(destChainName);

@@ -6,10 +6,10 @@ and a token plus pool that were both deployed by other tooling. In both cases th
 get the contracts into the [deployed-address registry](deployed-addresses.md) so every later script
 resolves them with zero exports, then continue with the standard setup and day-2 operations.
 
-| You have                                        | Path                                                                 |
-| ----------------------------------------------- | -------------------------------------------------------------------- |
-| An existing token, no CCIP pool                 | [Scenario 1](#scenario-1-existing-token-no-pool): adopt the token, deploy a pool for it |
-| An existing token AND pool from other tooling   | [Scenario 2](#scenario-2-existing-token-and-pool): adopt both, run day-2 operations |
+| You have                                      | Path                                                                                    |
+| --------------------------------------------- | --------------------------------------------------------------------------------------- |
+| An existing token, no CCIP pool               | [Scenario 1](#scenario-1-existing-token-no-pool): adopt the token, deploy a pool for it |
+| An existing token AND pool from other tooling | [Scenario 2](#scenario-2-existing-token-and-pool): adopt both, run day-2 operations     |
 
 Both paths run through `make adopt-token`, which validates everything on chain before writing a
 single registry entry (see [what adopt-token validates](#what-adopt-token-validates)).
@@ -18,13 +18,15 @@ single registry entry (see [what adopt-token validates](#what-adopt-token-valida
 
 1. Adopt the token into the registry:
 
-    ```bash
-    make adopt-token CHAIN=ethereum-testnet-sepolia TOKEN=0xYourToken
-    ```
+   ```bash
+   make adopt-token CHAIN=ethereum-testnet-sepolia TOKEN=0xYourToken
+   ```
 
-    `CHAIN` is the canonical selectorName (the `config/chains/<name>.json` basename). The command
-    probes the token's registration path and records it in `addresses/<chainId>.json`; from here on,
-    scripts resolve `TOKEN` from the registry with no `export`.
+   `CHAIN` is the canonical selectorName (the `config/chains/<name>.json` basename, which is also the
+   project-store basename). The command probes the token's registration path and records it in the
+   `addresses{}` subtree of `project/<selectorName>.json`; from here on, scripts resolve `TOKEN` from the
+   registry with no `export`. For a non-EVM chain, adopt base58 values instead:
+   `make adopt-token CHAIN=<solana-chain> TOKEN_B58=<base58> [POOL_B58=<base58>]`.
 
 2. Deploy a pool for it, following [Step 2 of the deployment flow](../README.md#step-2-deploy-token-pools-on-both-chains)
    (BurnMint if you hold mint/burn rights on the token, LockRelease plus lockbox otherwise). The
@@ -85,14 +87,14 @@ RATE=<wei> [BOTH=1]`), so `make doctor` can prove mesh reciprocity; see
 Validation happens on chain BEFORE anything is written; a failed probe refuses the adoption and
 writes nothing. What each check and refusal means:
 
-| Check                                              | On failure                                                                                       |
-| -------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| The token address has contract code                | `no contract code at token 0x...`: wrong address or wrong chain                                   |
-| Registration path: `getCCIPAdmin()`, then `owner()` | Neither answers: a WARN, not a refusal (see below)                                                |
-| The pool address has contract code (when given)    | `no contract code at pool 0x...`                                                                  |
-| The pool reports a cataloged contract version      | A named refusal from the resolver: see [version gating](#version-gating-at-adoption)              |
-| The pool's `getToken()` equals `TOKEN`             | `pool/token mismatch: pool 0x... manages 0x..., not 0x...`: the pool binds a different token      |
-| TokenAdminRegistry state read-back                 | Never refuses; reports administrator, pending administrator, and registered pool                   |
+| Check                                               | On failure                                                                                   |
+| --------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| The token address has contract code                 | `no contract code at token 0x...`: wrong address or wrong chain                              |
+| Registration path: `getCCIPAdmin()`, then `owner()` | Neither answers: a WARN, not a refusal (see below)                                           |
+| The pool address has contract code (when given)     | `no contract code at pool 0x...`                                                             |
+| The pool reports a cataloged contract version       | A named refusal from the resolver: see [version gating](#version-gating-at-adoption)         |
+| The pool's `getToken()` equals `TOKEN`              | `pool/token mismatch: pool 0x... manages 0x..., not 0x...`: the pool binds a different token |
+| TokenAdminRegistry state read-back                  | Never refuses; reports administrator, pending administrator, and registered pool             |
 
 Two of the read-backs are warnings by design:
 

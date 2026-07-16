@@ -29,11 +29,25 @@ batches/*
 .DS_Store
 */.DS_Store
 
-# Deployments (user-generated, kept local)
-script/deployments/
+# Deploy history ledger (append-only, written by the deploy scripts, kept local; per-artifact
+# timestamped files under history/<category>/<selectorName>/) - never tracked
+history/
 
-# Deployed-address registry (written by the deploy scripts, kept local)
-addresses/*.json
-!addresses/11155111.example.json
-# Scratch chain configs written (and removed) by DynamicChainDiscovery tests - never commit a leak
+# Project state store (lanes + roles + deployed addresses). In THIS template repo it holds OUR
+# throwaway test-deployment addresses, so it is gitignored and only the example ships. A downstream
+# FORK should UN-gitignore project/ so its lanes/roles/addresses become one reviewed, git-versioned,
+# team-shared source of truth (see docs/deployed-addresses.md).
+project/*.json
+!project/ethereum-testnet-sepolia.example.json
+project/zz-scratch-*.json
+project/local-*.json
+# Token-group subdirectories (project/<group>/<selectorName>.json) - same policy as the flat files
+project/*/*.json
+
+# Scratch files written (and removed) by tests - never commit a leak
 config/chains/zz-scratch-*.json
+history/**/zz-scratch-*
+project/zz-scratch-*/
+# Visible test group dirs (zz-tt-*): NOT skipped by the group-sweeping tools, so tests can assert
+# discovery/notice on them; still gitignored + removed by the test cleanup.
+project/zz-tt-*/

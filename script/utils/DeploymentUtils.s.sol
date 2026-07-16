@@ -9,61 +9,72 @@ import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IER
 /// @notice Shared deployment-saving utilities used by all deploy scripts to avoid duplication.
 /// Each function creates the target directory if it does not exist, writes a timestamped JSON
 /// file containing the deployed contract address(es), and prints the saved path to the console.
+///
+/// @dev The append-only ledger lives under **`history/<category>/<selectorName>/…`**, keyed by the
+/// canonical **selectorName** directory. The token, pool, and lock-box file bodies key by
+/// `chainNameIdentifier` (e.g. `ETHEREUM_SEPOLIA_TOKEN`), so those callers pass BOTH the selectorName
+/// (the directory) and the chainNameIdentifier (the body); the hooks file is named by symbol +
+/// poolType and carries a fixed `POOL_HOOKS` body key. Each deploy writes a NEW timestamped file —
+/// pure create, never rewrite. `history/` is gitignored.
 library DeploymentUtils {
     /// @dev Saves a token deployment.
-    /// Output: `script/deployments/tokens/{chainNameIdentifier}/{timestamp}-{symbol}-Token.json`
+    /// Output: `history/tokens/{selectorName}/{timestamp}-{symbol}-Token.json`
     /// @param vm              Forge VM cheat-code interface
-    /// @param chainNameIdentifier Chain identifier string (e.g. `ETHEREUM_SEPOLIA`)
+    /// @param selectorName    Canonical selectorName (the ledger directory, == config basename)
+    /// @param chainNameIdentifier Chain identifier string used in the file BODY (e.g. `ETHEREUM_SEPOLIA`)
     /// @param symbol          Token symbol, used as the file-name prefix
     /// @param tokenAddress    Address of the deployed token contract
-    function saveTokenDeployment(Vm vm, string memory chainNameIdentifier, string memory symbol, address tokenAddress)
-        internal
-    {
-        string memory deploymentDir =
-            string.concat(vm.projectRoot(), "/script/deployments/tokens/", chainNameIdentifier, "/");
+    function saveTokenDeployment(
+        Vm vm,
+        string memory selectorName,
+        string memory chainNameIdentifier,
+        string memory symbol,
+        address tokenAddress
+    ) internal {
+        string memory deploymentDir = string.concat(vm.projectRoot(), "/history/tokens/", selectorName, "/");
         vm.createDir(deploymentDir, true);
 
+        // Unique serialization handle per call: forge's serialize journal is keyed by the handle and
+        // ACCUMULATES across calls in one process, so a shared handle would bleed stale keys from a prior
+        // save into this artifact's body (proven for the pool handle). Keying by the address isolates it.
+        string memory handle = string.concat("tokenDeployment-", vm.toString(tokenAddress));
         string memory deploymentJson =
-            vm.serializeAddress("tokenDeployment", string.concat(chainNameIdentifier, "_TOKEN"), tokenAddress);
+            vm.serializeAddress(handle, string.concat(chainNameIdentifier, "_TOKEN"), tokenAddress);
         string memory timestamp = vm.toString(block.timestamp);
         string memory deploymentFile = string.concat(deploymentDir, timestamp, "-", symbol, "-Token.json");
         vm.writeJson(deploymentJson, deploymentFile);
 
         console.log(
-            string.concat(
-                "Deployment saved: script/deployments/tokens/",
-                chainNameIdentifier,
-                "/",
-                timestamp,
-                "-",
-                symbol,
-                "-Token.json"
-            )
+            string.concat("Deployment saved: history/tokens/", selectorName, "/", timestamp, "-", symbol, "-Token.json")
         );
     }
 
     /// @dev Saves a burn-mint token pool deployment.
-    /// Output: `script/deployments/token-pools/{chainNameIdentifier}/{timestamp}-{symbol}-{poolType}TokenPool.json`
+    /// Output: `history/token-pools/{selectorName}/{timestamp}-{symbol}-{poolType}TokenPool.json`
     /// @param vm                  Forge VM cheat-code interface
-    /// @param chainNameIdentifier Chain identifier string (e.g. `ETHEREUM_SEPOLIA`)
+    /// @param selectorName        Canonical selectorName (the ledger directory)
+    /// @param chainNameIdentifier Chain identifier string used in the file BODY (e.g. `ETHEREUM_SEPOLIA`)
     /// @param tokenPoolAddress    Address of the deployed token pool contract
     /// @param tokenAddress        Address of the token the pool is deployed for (used to resolve the symbol)
     /// @param poolType            Pool type label used in the file name (e.g. `BurnMint`)
     function saveTokenPoolDeployment(
         Vm vm,
+        string memory selectorName,
         string memory chainNameIdentifier,
         address tokenPoolAddress,
         address tokenAddress,
         string memory poolType
     ) internal {
         string memory symbol = getSymbol(vm, tokenAddress);
-        string memory deploymentDir =
-            string.concat(vm.projectRoot(), "/script/deployments/token-pools/", chainNameIdentifier, "/");
+        string memory deploymentDir = string.concat(vm.projectRoot(), "/history/token-pools/", selectorName, "/");
         vm.createDir(deploymentDir, true);
 
-        vm.serializeAddress("poolDeployment", string.concat(chainNameIdentifier, "_TOKEN_POOL"), tokenPoolAddress);
+        // Unique handle per call (see saveTokenDeployment): a shared "poolDeployment" handle would carry a
+        // stale LOCK_BOX key from a prior lock-release save into this burn-mint body.
+        string memory handle = string.concat("poolDeployment-", vm.toString(tokenPoolAddress));
+        vm.serializeAddress(handle, string.concat(chainNameIdentifier, "_TOKEN_POOL"), tokenPoolAddress);
         string memory deploymentJson =
-            vm.serializeAddress("poolDeployment", string.concat(chainNameIdentifier, "_TOKEN"), tokenAddress);
+            vm.serializeAddress(handle, string.concat(chainNameIdentifier, "_TOKEN"), tokenAddress);
         string memory timestamp = vm.toString(block.timestamp);
         string memory deploymentFile =
             string.concat(deploymentDir, timestamp, "-", symbol, "-", poolType, "TokenPool.json");
@@ -71,8 +82,8 @@ library DeploymentUtils {
 
         console.log(
             string.concat(
-                "Deployment saved: script/deployments/token-pools/",
-                chainNameIdentifier,
+                "Deployment saved: history/token-pools/",
+                selectorName,
                 "/",
                 timestamp,
                 "-",
@@ -85,15 +96,17 @@ library DeploymentUtils {
     }
 
     /// @dev Saves a lock-release token pool deployment (includes the associated lock box address).
-    /// Output: `script/deployments/token-pools/{chainNameIdentifier}/{timestamp}-{symbol}-{poolType}TokenPool.json`
+    /// Output: `history/token-pools/{selectorName}/{timestamp}-{symbol}-{poolType}TokenPool.json`
     /// @param vm                  Forge VM cheat-code interface
-    /// @param chainNameIdentifier Chain identifier string (e.g. `ETHEREUM_SEPOLIA`)
+    /// @param selectorName        Canonical selectorName (the ledger directory)
+    /// @param chainNameIdentifier Chain identifier string used in the file BODY (e.g. `ETHEREUM_SEPOLIA`)
     /// @param tokenPoolAddress    Address of the deployed token pool contract
     /// @param tokenAddress        Address of the token the pool is deployed for (used to resolve the symbol)
     /// @param lockBox             Address of the ERC20LockBox associated with this pool
     /// @param poolType            Pool type label used in the file name (e.g. `LockRelease`)
     function saveLockReleaseTokenPoolDeployment(
         Vm vm,
+        string memory selectorName,
         string memory chainNameIdentifier,
         address tokenPoolAddress,
         address tokenAddress,
@@ -101,14 +114,16 @@ library DeploymentUtils {
         string memory poolType
     ) internal {
         string memory symbol = getSymbol(vm, tokenAddress);
-        string memory deploymentDir =
-            string.concat(vm.projectRoot(), "/script/deployments/token-pools/", chainNameIdentifier, "/");
+        string memory deploymentDir = string.concat(vm.projectRoot(), "/history/token-pools/", selectorName, "/");
         vm.createDir(deploymentDir, true);
 
-        vm.serializeAddress("poolDeployment", string.concat(chainNameIdentifier, "_TOKEN_POOL"), tokenPoolAddress);
-        vm.serializeAddress("poolDeployment", "LOCK_BOX", lockBox);
+        // Unique handle per call (see saveTokenDeployment) so this lock-release body never bleeds keys
+        // into (or from) a sibling pool save sharing the process.
+        string memory handle = string.concat("poolDeployment-", vm.toString(tokenPoolAddress));
+        vm.serializeAddress(handle, string.concat(chainNameIdentifier, "_TOKEN_POOL"), tokenPoolAddress);
+        vm.serializeAddress(handle, "LOCK_BOX", lockBox);
         string memory deploymentJson =
-            vm.serializeAddress("poolDeployment", string.concat(chainNameIdentifier, "_TOKEN"), tokenAddress);
+            vm.serializeAddress(handle, string.concat(chainNameIdentifier, "_TOKEN"), tokenAddress);
         string memory timestamp = vm.toString(block.timestamp);
         string memory deploymentFile =
             string.concat(deploymentDir, timestamp, "-", symbol, "-", poolType, "TokenPool.json");
@@ -116,8 +131,8 @@ library DeploymentUtils {
 
         console.log(
             string.concat(
-                "Deployment saved: script/deployments/token-pools/",
-                chainNameIdentifier,
+                "Deployment saved: history/token-pools/",
+                selectorName,
                 "/",
                 timestamp,
                 "-",
@@ -130,66 +145,65 @@ library DeploymentUtils {
     }
 
     /// @dev Saves a lock box deployment.
-    /// Output: `script/deployments/lock-boxes/{chainNameIdentifier}/{timestamp}-{symbol}-LockBox.json`
+    /// Output: `history/lock-boxes/{selectorName}/{timestamp}-{symbol}-LockBox.json`
     /// @param vm                  Forge VM cheat-code interface
-    /// @param chainNameIdentifier Chain identifier string (e.g. `ETHEREUM_SEPOLIA`)
+    /// @param selectorName        Canonical selectorName (the ledger directory)
+    /// @param chainNameIdentifier Chain identifier string used in the file BODY (e.g. `ETHEREUM_SEPOLIA`)
     /// @param lockBoxAddress      Address of the deployed ERC20LockBox contract
     /// @param tokenAddress        Address of the token the lock box is deployed for (used to resolve the symbol)
     function saveLockBoxDeployment(
         Vm vm,
+        string memory selectorName,
         string memory chainNameIdentifier,
         address lockBoxAddress,
         address tokenAddress
     ) internal {
         string memory symbol = getSymbol(vm, tokenAddress);
-        string memory deploymentDir =
-            string.concat(vm.projectRoot(), "/script/deployments/lock-boxes/", chainNameIdentifier, "/");
+        string memory deploymentDir = string.concat(vm.projectRoot(), "/history/lock-boxes/", selectorName, "/");
         vm.createDir(deploymentDir, true);
 
-        vm.serializeAddress("lockBoxDeployment", "LOCK_BOX", lockBoxAddress);
+        // Unique handle per call (see saveTokenDeployment).
+        string memory handle = string.concat("lockBoxDeployment-", vm.toString(lockBoxAddress));
+        vm.serializeAddress(handle, "LOCK_BOX", lockBoxAddress);
         string memory deploymentJson =
-            vm.serializeAddress("lockBoxDeployment", string.concat(chainNameIdentifier, "_TOKEN"), tokenAddress);
+            vm.serializeAddress(handle, string.concat(chainNameIdentifier, "_TOKEN"), tokenAddress);
         string memory timestamp = vm.toString(block.timestamp);
         string memory deploymentFile = string.concat(deploymentDir, timestamp, "-", symbol, "-LockBox.json");
         vm.writeJson(deploymentJson, deploymentFile);
 
         console.log(
             string.concat(
-                "Deployment saved: script/deployments/lock-boxes/",
-                chainNameIdentifier,
-                "/",
-                timestamp,
-                "-",
-                symbol,
-                "-LockBox.json"
+                "Deployment saved: history/lock-boxes/", selectorName, "/", timestamp, "-", symbol, "-LockBox.json"
             )
         );
     }
 
     /// @dev Saves an AdvancedPoolHooks deployment.
-    /// Output: `script/deployments/advanced-pool-hooks/{chainNameIdentifier}/{timestamp}-AdvancedPoolHooks.json`
+    /// Output: `history/advanced-pool-hooks/{selectorName}/{timestamp}-{symbol}-{poolType}AdvancedPoolHooks.json`
     /// @param vm                  Forge VM cheat-code interface
-    /// @param chainNameIdentifier Chain identifier string (e.g. `ETHEREUM_SEPOLIA`)
+    /// @param selectorName        Canonical selectorName (the ledger directory)
+    /// @param symbol              Token symbol (distinguishes co-located tokens' hooks, matching the ledger)
+    /// @param poolType            Pool type the hooks belong to
     /// @param hooksAddress        Address of the deployed AdvancedPoolHooks contract
-    function savePoolHooksDeployment(Vm vm, string memory chainNameIdentifier, address hooksAddress) internal {
+    function savePoolHooksDeployment(
+        Vm vm,
+        string memory selectorName,
+        string memory symbol,
+        string memory poolType,
+        address hooksAddress
+    ) internal {
         string memory deploymentDir =
-            string.concat(vm.projectRoot(), "/script/deployments/advanced-pool-hooks/", chainNameIdentifier, "/");
+            string.concat(vm.projectRoot(), "/history/advanced-pool-hooks/", selectorName, "/");
         vm.createDir(deploymentDir, true);
 
-        string memory deploymentJson = vm.serializeAddress("hooksDeployment", "POOL_HOOKS", hooksAddress);
+        // Unique handle per call (see saveTokenDeployment) for isolation across sibling saves.
+        string memory handle = string.concat("hooksDeployment-", vm.toString(hooksAddress));
+        string memory deploymentJson = vm.serializeAddress(handle, "POOL_HOOKS", hooksAddress);
         string memory timestamp = vm.toString(block.timestamp);
-        string memory deploymentFile = string.concat(deploymentDir, timestamp, "-AdvancedPoolHooks.json");
-        vm.writeJson(deploymentJson, deploymentFile);
+        string memory fileName = string.concat(timestamp, "-", symbol, "-", poolType, "AdvancedPoolHooks.json");
+        vm.writeJson(deploymentJson, string.concat(deploymentDir, fileName));
 
-        console.log(
-            string.concat(
-                "Deployment saved: script/deployments/advanced-pool-hooks/",
-                chainNameIdentifier,
-                "/",
-                timestamp,
-                "-AdvancedPoolHooks.json"
-            )
-        );
+        console.log(string.concat("Deployment saved: history/advanced-pool-hooks/", selectorName, "/", fileName));
     }
 
     /// @dev Resolves the token symbol by calling `symbol()` on the token contract, falling back to

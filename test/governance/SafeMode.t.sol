@@ -95,7 +95,7 @@ contract MockLockReleaseV1Pool {
     }
 }
 
-/// @notice PR 3.1 Safe-mode proofs, re-established in THIS repo against a real Safe deployed from the
+/// @notice Safe-mode proofs against a real Safe deployed from the
 ///         canonical v1.4.1 stack on a Sepolia fork:
 ///         - Requirement 2 byte-equality: for the whole action-layer catalog, the Safe Transaction
 ///           Builder batch JSON and the Mode B `execTransaction` payload carry the IDENTICAL inner
@@ -331,7 +331,7 @@ contract SafeModeForkTest is BaseForkTest {
         });
         _assertBatchRoundTrip("apply-chain-updates-v150", CctActions.applyChainUpdatesV150(pool, v150Updates));
 
-        // Whole-chain teardown shapes emitted by RemoveChain.s.sol, proven Safe-executable byte-for-byte.
+        // Whole-chain teardown shapes emitted by RemoveChain.s.sol, proven Safe-executable.
         // Modern (1.5.1+): the selector in `toRemove`, an empty `toAdd`.
         uint64[] memory chainRemovals = new uint64[](1);
         chainRemovals[0] = EVM_SELECTOR;

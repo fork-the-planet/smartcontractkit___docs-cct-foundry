@@ -21,14 +21,13 @@ import {TransferOwnership} from "../../script/setup/transfer-ownership/TransferO
 import {AcceptOwnership} from "../../script/setup/transfer-ownership/AcceptOwnership.s.sol";
 import {BaseForkTest} from "../BaseForkTest.t.sol";
 
-/// @notice Parity tests for the PR 1.1 action-layer refactor of the setup scripts.
+/// @notice Parity tests for the action-layer setup scripts.
 ///
-/// Methodology: the OLD (pre-refactor) script behavior was captured first — each test replays the exact
-/// calls the pre-refactor script made inline (direct typed calls from the same signer), snapshots the
-/// resulting on-chain state, reverts the fork, then runs the REFACTORED script and asserts the identical
-/// end state. Where encoding matters (`applyChainUpdates`, `setPool`), the `CctActions` builder output is
-/// additionally pinned byte-for-byte against a hand-written `abi.encodeCall` expectation, for an EVM
-/// remote AND an SVM remote input.
+/// Methodology: each test replays the exact typed calls a script makes inline (direct calls from the
+/// same signer), snapshots the resulting on-chain state, reverts the fork, then runs the script and
+/// asserts the identical end state. Where encoding matters (`applyChainUpdates`, `setPool`), the
+/// `CctActions` builder output is additionally pinned against a hand-written `abi.encodeCall`
+/// expectation, for an EVM remote AND an SVM remote input.
 contract SetupActionsForkTest is BaseForkTest {
     address internal constant NEW_OWNER = address(uint160(uint256(keccak256("setup-actions.new-owner"))));
 
@@ -57,7 +56,11 @@ contract SetupActionsForkTest is BaseForkTest {
         deployer = _scriptBroadcaster();
         registry = TokenAdminRegistry(networkConfig.tokenAdminRegistry);
         registryModule = RegistryModuleOwnerCustom(networkConfig.registryModuleOwnerCustom);
-        vm.setEnv("TOKEN_POOL", vm.toString(pool));
+        // Chain-SCOPED, never the bare `TOKEN_POOL` alias: `vm.setEnv` is process-global and forge runs
+        // suites in parallel, so a bare `TOKEN_POOL` here smears this Sepolia fixture across every other
+        // suite's resolution ladder (it beat RegistryResolution's chain-scoped rung-2 assertion). This
+        // fork is Sepolia, so the chain-scoped form resolves identically for any script this suite drives.
+        vm.setEnv("ETHEREUM_SEPOLIA_TOKEN_POOL", vm.toString(pool));
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -110,38 +113,38 @@ contract SetupActionsForkTest is BaseForkTest {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // Fork state parity: old inline path vs refactored script path
+    // Fork state parity: inline baseline vs script path
     // ─────────────────────────────────────────────────────────────────────────
 
-    /// @dev ClaimAdmin + AcceptAdminRole: the pre-refactor scripts called
+    /// @dev ClaimAdmin + AcceptAdminRole: the baseline calls
     ///      `registerAdminViaGetCCIPAdmin(token)` (the fixture token exposes `getCCIPAdmin()`, which the
-    ///      script probe prefers) then `acceptAdminRole(token)` from the same signer. The refactored
-    ///      scripts must land the identical TokenConfig administrator.
+    ///      script probe prefers) then `acceptAdminRole(token)` from the same signer. The scripts must
+    ///      land the identical TokenConfig administrator.
     function test_ClaimAndAcceptAdmin_ForkStateParity() public {
         uint256 snapshot = vm.snapshotState();
 
-        // OLD path (captured pre-refactor behavior), replayed inline from the same signer.
+        // Baseline path, replayed inline from the same signer.
         vm.prank(deployer);
         registryModule.registerAdminViaGetCCIPAdmin(token);
         vm.prank(deployer);
         registry.acceptAdminRole(token);
-        address oldAdministrator = registry.getTokenConfig(token).administrator;
-        assertEq(oldAdministrator, deployer, "old path must set the signer as administrator");
+        address directAdministrator = registry.getTokenConfig(token).administrator;
+        assertEq(directAdministrator, deployer, "direct calls must set the signer as administrator");
 
         vm.revertToState(snapshot);
 
-        // NEW path: the refactored scripts.
+        // The same result through the ClaimAdmin + AcceptAdminRole scripts.
         new ClaimAdmin().run();
         assertEq(
             registry.getTokenConfig(token).pendingAdministrator,
-            oldAdministrator,
-            "refactored ClaimAdmin pendingAdministrator mismatch"
+            directAdministrator,
+            "ClaimAdmin pendingAdministrator mismatch"
         );
         new AcceptAdminRole().run();
         assertEq(
             registry.getTokenConfig(token).administrator,
-            oldAdministrator,
-            "refactored scripts must land the same administrator as the old path"
+            directAdministrator,
+            "the scripts must land the same administrator as the direct calls"
         );
     }
 
@@ -161,7 +164,8 @@ contract SetupActionsForkTest is BaseForkTest {
         assertEq(registry.getTokenConfig(token).pendingAdministrator, address(0), "pending must be cleared");
     }
 
-    /// @dev SetPool: old inline `registry.setPool(token, pool)` vs the refactored script.
+    /// @dev SetPool: a direct `registry.setPool(token, pool)` and the SetPool script land the same
+    ///      registry state.
     function test_SetPool_ForkStateParity() public {
         // Prerequisite for both paths: the signer is the token's registry administrator.
         vm.prank(deployer);
@@ -171,18 +175,18 @@ contract SetupActionsForkTest is BaseForkTest {
 
         uint256 snapshot = vm.snapshotState();
 
-        // OLD path.
+        // Direct call.
         vm.prank(deployer);
         registry.setPool(token, pool);
-        address oldPool = registry.getPool(token);
-        assertEq(oldPool, pool, "old path must register the pool");
+        address directPool = registry.getPool(token);
+        assertEq(directPool, pool, "the direct call must register the pool");
 
         vm.revertToState(snapshot);
 
-        // NEW path.
+        // Script path.
         assertEq(registry.getPool(token), address(0), "precondition: no pool registered");
         new SetPool().run();
-        assertEq(registry.getPool(token), oldPool, "refactored SetPool must land the same registry state");
+        assertEq(registry.getPool(token), directPool, "SetPool must land the same registry state");
     }
 
     /// @notice All ownership scenarios run inside ONE test function on purpose: forge executes tests in
@@ -195,22 +199,22 @@ contract SetupActionsForkTest is BaseForkTest {
         _tokenDefaultAdminParity();
     }
 
-    /// @dev Pool ownership two-step: old inline `transferOwnership` + `acceptOwnership` vs the refactored
-    ///      TransferOwnership script (step 1) with the pending owner accepting (step 2).
+    /// @dev Pool ownership two-step: a direct `transferOwnership` + `acceptOwnership` and the
+    ///      TransferOwnership script (step 1) with the pending owner accepting (step 2) land the same owner.
     function _poolOwnershipTwoStepParity() internal {
         uint256 snapshot = vm.snapshotState();
 
-        // OLD path.
+        // Direct calls.
         vm.prank(deployer);
         TokenPool(pool).transferOwnership(NEW_OWNER);
         vm.prank(NEW_OWNER);
         TokenPool(pool).acceptOwnership();
-        address oldOwner = TokenPool(pool).owner();
-        assertEq(oldOwner, NEW_OWNER, "old path must complete the two-step transfer");
+        address directOwner = TokenPool(pool).owner();
+        assertEq(directOwner, NEW_OWNER, "the direct calls must complete the two-step transfer");
 
         vm.revertToState(snapshot);
 
-        // NEW path (step 1 via the refactored script; step 2 executed by the pending owner).
+        // Script path (step 1 via the script; step 2 executed by the pending owner).
         vm.setEnv("ENTITY_TYPE", "tokenPool");
         vm.setEnv("ADDRESS", vm.toString(pool));
         vm.setEnv("NEW_OWNER", vm.toString(NEW_OWNER));
@@ -218,14 +222,14 @@ contract SetupActionsForkTest is BaseForkTest {
 
         vm.prank(NEW_OWNER);
         TokenPool(pool).acceptOwnership();
-        assertEq(TokenPool(pool).owner(), oldOwner, "refactored path must land the same owner");
+        assertEq(TokenPool(pool).owner(), directOwner, "the script must land the same owner");
 
         // Leave the fixture as setUp created it for the next phase.
         vm.revertToState(snapshot);
     }
 
     /// @dev AcceptOwnership script path: a pool whose pending owner is the script signer completes the
-    ///      two-step through the refactored script.
+    ///      two-step through the script.
     function _acceptOwnershipPoolScript() internal {
         // A second pool owned by another account, with the script signer as pending owner.
         vm.prank(NEW_OWNER);
@@ -238,38 +242,38 @@ contract SetupActionsForkTest is BaseForkTest {
         vm.setEnv("ADDRESS", vm.toString(address(otherPool)));
         new AcceptOwnership().run();
 
-        assertEq(otherPool.owner(), deployer, "refactored AcceptOwnership must complete the transfer");
+        assertEq(otherPool.owner(), deployer, "the AcceptOwnership script must complete the transfer");
     }
 
-    /// @dev Token default-admin two-step (CrossChainToken, AccessControlDefaultAdminRules): old inline
-    ///      `beginDefaultAdminTransfer` + warp past the transfer schedule + `acceptDefaultAdminTransfer`
-    ///      vs the refactored TransferOwnership script and the action-layer accept builder. Captured
-    ///      pre-refactor: the accept before the schedule reverts AccessControlEnforcedDefaultAdminDelay,
+    /// @dev Token default-admin two-step (CrossChainToken, AccessControlDefaultAdminRules): inline
+    ///      baseline `beginDefaultAdminTransfer` + warp past the transfer schedule +
+    ///      `acceptDefaultAdminTransfer` vs the TransferOwnership script and the action-layer accept
+    ///      builder. The accept before the schedule reverts AccessControlEnforcedDefaultAdminDelay,
     ///      so both paths warp identically.
     function _tokenDefaultAdminParity() internal {
         IAccessControlDefaultAdminRules adminRules = IAccessControlDefaultAdminRules(token);
         uint256 snapshot = vm.snapshotState();
 
-        // OLD path.
+        // Direct calls: the two-step done inline.
         vm.prank(deployer);
         adminRules.beginDefaultAdminTransfer(NEW_OWNER);
-        (, uint48 oldSchedule) = adminRules.pendingDefaultAdmin();
-        vm.warp(uint256(oldSchedule) + 1);
+        (, uint48 directSchedule) = adminRules.pendingDefaultAdmin();
+        vm.warp(uint256(directSchedule) + 1);
         vm.prank(NEW_OWNER);
         adminRules.acceptDefaultAdminTransfer();
-        address oldAdmin = adminRules.defaultAdmin();
-        assertEq(oldAdmin, NEW_OWNER, "old path must complete the default-admin transfer");
+        address directAdmin = adminRules.defaultAdmin();
+        assertEq(directAdmin, NEW_OWNER, "direct calls must complete the default-admin transfer");
 
         vm.revertToState(snapshot);
 
-        // NEW path.
+        // The TransferOwnership script plus the action-layer accept builder.
         vm.setEnv("ENTITY_TYPE", "token");
         vm.setEnv("ADDRESS", vm.toString(token));
         vm.setEnv("NEW_OWNER", vm.toString(NEW_OWNER));
         new TransferOwnership().run();
 
         (address pendingAdmin, uint48 schedule) = adminRules.pendingDefaultAdmin();
-        assertEq(pendingAdmin, NEW_OWNER, "refactored script must set the pending default admin");
+        assertEq(pendingAdmin, NEW_OWNER, "the TransferOwnership script must set the pending default admin");
         vm.warp(uint256(schedule) + 1);
 
         // Step 2 through the action-layer builder, executed by the pending admin.
@@ -278,11 +282,11 @@ contract SetupActionsForkTest is BaseForkTest {
         (bool success,) = calls[0].target.call{value: calls[0].value}(calls[0].data);
         assertTrue(success, "acceptDefaultAdminTransfer call failed");
 
-        assertEq(adminRules.defaultAdmin(), oldAdmin, "refactored path must land the same default admin");
+        assertEq(adminRules.defaultAdmin(), directAdmin, "the script path must land the same default admin");
     }
 
     /// @dev The fixture token's CCIP admin is the deployer, which is what makes the ClaimAdmin probe
-    ///      pick the getCCIPAdmin claim path in these parity tests (same as the captured old runs).
+    ///      pick the getCCIPAdmin claim path in these parity tests.
     function test_Fixture_ClaimProbe_PrefersGetCCIPAdmin() public view {
         assertEq(IGetCCIPAdmin(token).getCCIPAdmin(), deployer, "fixture CCIP admin must be the deployer");
     }

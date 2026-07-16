@@ -2,23 +2,27 @@
 pragma solidity 0.8.24;
 
 import {Vm} from "forge-std/Vm.sol";
+import {VmSafe} from "forge-std/Vm.sol";
 import {DeploymentUtils} from "./DeploymentUtils.s.sol";
 import {RegistryWriter} from "../../src/utils/RegistryWriter.sol";
 
 /// @title DeploymentRecorder
 /// @notice The single writer for a deployed artifact. Each deploy script makes ONE recorder call per
-/// artifact that (a) emits the detailed timestamped ledger file via `DeploymentUtils.save*` (Syed's
-/// format, byte-for-byte unchanged) AND (b) upserts the address into `addresses/<chainId>.json` via
-/// `RegistryWriter` (`deployments[name]` + `active[role]`). This collapses the historical
-/// double-write — two adjacent, independently-maintained calls (`DeploymentUtils.save*` then
-/// `RegistryWriter.record`) that wrote the same address to two stores in two formats with nothing
-/// keeping them in sync — into one call, so the two stores can never drift.
+/// artifact that (a) emits the timestamped ledger file via `DeploymentUtils.save*` under
+/// `history/<category>/<selectorName>/` AND (b) upserts the address into the `addresses{}` sub-store of
+/// `project/<selectorName>.json` via `RegistryWriter` (`deployments[name]` + `active[role]`). Routing
+/// both writes through one call keeps the two stores from drifting. Both stores key by the canonical
+/// **selectorName**. The token, pool, and lock-box ledger file bodies key by `chainNameIdentifier`
+/// (those calls pass both); the hooks ledger names its file by symbol + poolType and carries a fixed
+/// `POOL_HOOKS` body key, so `recordPoolHooks` takes no `chainNameIdentifier`.
 ///
 /// @dev The registry half is context-aware (via `RegistryWriter.record`): it no-ops under `forge test`
 /// and on a dry-run `forge script`, and writes only on `--broadcast`/`--resume`. The ledger half
-/// (`DeploymentUtils.save*`) always writes, exactly as before. The `deployments` key is composed here
-/// from the same symbol the ledger file is named with (`DeploymentUtils.getSymbol`), so the key and the
-/// filename never disagree.
+/// (`DeploymentUtils.save*`) writes on every SCRIPT run (dry-run included) but no-ops under
+/// `forge test` - the fork fixtures run the real deploy scripts, and an unguarded ledger write strands
+/// timestamped `history/<cat>/ethereum-testnet-sepolia/` files on every test run (the CI residue gate
+/// catches it). Ledger behavior itself is tested through `DeploymentUtils.save*` directly. The `deployments` key is composed here from the same symbol
+/// the ledger file is named with (`DeploymentUtils.getSymbol`), so the key and the filename agree.
 ///
 /// Keying:
 /// | Artifact  | `deployments` key                        | `active` role |
@@ -36,59 +40,69 @@ library DeploymentRecorder {
     /// @notice Records a token deployment: ledger file + `deployments[{symbol}_Token]` + `active.token`.
     function recordToken(
         Vm vm,
-        uint256 chainId,
+        string memory selectorName,
         string memory chainNameIdentifier,
         string memory symbol,
         address tokenAddress
     ) internal {
-        DeploymentUtils.saveTokenDeployment(vm, chainNameIdentifier, symbol, tokenAddress);
-        RegistryWriter.record(chainId, "token", tokenName(symbol), tokenAddress);
+        if (!vm.isContext(VmSafe.ForgeContext.TestGroup)) {
+            DeploymentUtils.saveTokenDeployment(vm, selectorName, chainNameIdentifier, symbol, tokenAddress);
+        }
+        RegistryWriter.record(selectorName, "token", tokenName(symbol), tokenAddress);
     }
 
     /// @notice Records a burn-mint-style token pool: ledger file +
     /// `deployments[{symbol}_{poolType}TokenPool_{version}]` + `active.tokenPool`.
     function recordTokenPool(
         Vm vm,
-        uint256 chainId,
+        string memory selectorName,
         string memory chainNameIdentifier,
         address tokenPoolAddress,
         address tokenAddress,
         string memory poolType
     ) internal {
-        DeploymentUtils.saveTokenPoolDeployment(vm, chainNameIdentifier, tokenPoolAddress, tokenAddress, poolType);
+        if (!vm.isContext(VmSafe.ForgeContext.TestGroup)) {
+            DeploymentUtils.saveTokenPoolDeployment(
+                vm, selectorName, chainNameIdentifier, tokenPoolAddress, tokenAddress, poolType
+            );
+        }
         string memory symbol = DeploymentUtils.getSymbol(vm, tokenAddress);
-        RegistryWriter.record(chainId, "tokenPool", poolName(symbol, poolType), tokenPoolAddress);
+        RegistryWriter.record(selectorName, "tokenPool", poolName(symbol, poolType), tokenPoolAddress);
     }
 
     /// @notice Records a lock-release token pool (ledger includes the lock box): ledger file +
     /// `deployments[{symbol}_{poolType}TokenPool_{version}]` + `active.tokenPool`.
     function recordTokenPool(
         Vm vm,
-        uint256 chainId,
+        string memory selectorName,
         string memory chainNameIdentifier,
         address tokenPoolAddress,
         address tokenAddress,
         address lockBox,
         string memory poolType
     ) internal {
-        DeploymentUtils.saveLockReleaseTokenPoolDeployment(
-            vm, chainNameIdentifier, tokenPoolAddress, tokenAddress, lockBox, poolType
-        );
+        if (!vm.isContext(VmSafe.ForgeContext.TestGroup)) {
+            DeploymentUtils.saveLockReleaseTokenPoolDeployment(
+                vm, selectorName, chainNameIdentifier, tokenPoolAddress, tokenAddress, lockBox, poolType
+            );
+        }
         string memory symbol = DeploymentUtils.getSymbol(vm, tokenAddress);
-        RegistryWriter.record(chainId, "tokenPool", poolName(symbol, poolType), tokenPoolAddress);
+        RegistryWriter.record(selectorName, "tokenPool", poolName(symbol, poolType), tokenPoolAddress);
     }
 
     /// @notice Records a lock box: ledger file + `deployments[{symbol}_LockBox]` + `active.lockBox`.
     function recordLockBox(
         Vm vm,
-        uint256 chainId,
+        string memory selectorName,
         string memory chainNameIdentifier,
         address lockBoxAddress,
         address tokenAddress
     ) internal {
-        DeploymentUtils.saveLockBoxDeployment(vm, chainNameIdentifier, lockBoxAddress, tokenAddress);
+        if (!vm.isContext(VmSafe.ForgeContext.TestGroup)) {
+            DeploymentUtils.saveLockBoxDeployment(vm, selectorName, chainNameIdentifier, lockBoxAddress, tokenAddress);
+        }
         string memory symbol = DeploymentUtils.getSymbol(vm, tokenAddress);
-        RegistryWriter.record(chainId, "lockBox", lockBoxName(symbol), lockBoxAddress);
+        RegistryWriter.record(selectorName, "lockBox", lockBoxName(symbol), lockBoxAddress);
     }
 
     /// @notice Records pool hooks: ledger file + `deployments[{symbol}_{poolType}_PoolHooks]` +
@@ -96,15 +110,16 @@ library DeploymentRecorder {
     /// from `tokenAddress`, `address(0)` → env `TOKEN_SYMBOL` / "unknown") and the pool type.
     function recordPoolHooks(
         Vm vm,
-        uint256 chainId,
-        string memory chainNameIdentifier,
+        string memory selectorName,
         address hooksAddress,
         address tokenAddress,
         string memory poolType
     ) internal {
-        DeploymentUtils.savePoolHooksDeployment(vm, chainNameIdentifier, hooksAddress);
         string memory symbol = DeploymentUtils.getSymbol(vm, tokenAddress);
-        RegistryWriter.record(chainId, "poolHooks", hooksName(symbol, poolType), hooksAddress);
+        if (!vm.isContext(VmSafe.ForgeContext.TestGroup)) {
+            DeploymentUtils.savePoolHooksDeployment(vm, selectorName, symbol, poolType, hooksAddress);
+        }
+        RegistryWriter.record(selectorName, "poolHooks", hooksName(symbol, poolType), hooksAddress);
     }
 
     // ── key composition (pure; the deploy scripts reuse these to key the pre-broadcast guard) ──

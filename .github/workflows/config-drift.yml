@@ -45,6 +45,33 @@ jobs:
           fi
           exit $code
 
+  tooling-live:
+    name: config-tooling (live API, non-blocking)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 22
+          cache: npm
+      - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a # v1.9.0
+        with:
+          version: ${{ env.FOUNDRY_VERSION }}
+      - run: npm ci
+      # The live partition reaches the real CCIP API (selector/name resolution, drift, the
+      # API-fetching doctor rungs). Non-blocking: a scheduled live check that flakes on API
+      # unreachability must not page anyone, so a nonzero result surfaces as a ::warning:: to
+      # investigate rather than a red build — the offline partition in ci.yml is the PR gate.
+      - name: test-tooling.sh (live partition)
+        run: |
+          set +e
+          TOOLING_PARTITION=live bash script/config/test-tooling.sh
+          code=$?
+          if [ "$code" -ne 0 ]; then
+            echo "::warning::config-tooling live partition reported failures (real API-contract drift or API flake) - investigate"
+          fi
+          exit 0
+
   roles-check:
     name: roles-check vs the live chains (non-blocking)
     runs-on: ubuntu-latest

@@ -5,7 +5,7 @@ import {IERC20} from "@openzeppelin/contracts@5.3.0/token/ERC20/IERC20.sol";
 import {CctActions} from "../../src/actions/CctActions.sol";
 import {BaseForkTest} from "../BaseForkTest.t.sol";
 
-/// @notice Fork parity tests for the PR 1.2 rollout of the `operations/` write scripts (mint, fee-token
+/// @notice Fork parity tests for the `operations/` write scripts (mint, fee-token
 /// withdrawal). Deposit/withdraw round-trips live in `LockboxOps.t.sol`. Each op is exercised through its
 /// `CctActions` builder and asserted via balance deltas.
 contract OperationsActionsForkTest is BaseForkTest {

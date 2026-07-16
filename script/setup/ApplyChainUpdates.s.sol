@@ -11,6 +11,7 @@ import {PoolVersion} from "../utils/PoolVersion.s.sol";
 import {PoolVersions} from "../../src/PoolVersions.sol";
 import {CctActions, ITokenPoolV150} from "../../src/actions/CctActions.sol";
 import {EoaExecutor} from "../../src/base/EoaExecutor.s.sol";
+import {ProjectStore} from "../../src/utils/ProjectStore.sol";
 
 /// @notice Configures cross-chain lanes on the source TokenPool by calling applyChainUpdates.
 /// Sets the remote pool(s), remote token, and optional rate limiter configs per destination chain.
@@ -88,11 +89,11 @@ import {EoaExecutor} from "../../src/base/EoaExecutor.s.sol";
 ///
 /// Rate-limit input resolution ladder (CLI mode, per direction — matching the repo's
 /// inline > env > registry idiom):
-///   1. Any of the direction's rate-limit env vars set → the env values win, byte-for-byte the
-///      historical behavior above. When the local chain config declares a diverging lanes{} policy
+///   1. Any of the direction's rate-limit env vars set → the env values win. When the local chain
+///      config declares a diverging lanes{} policy
 ///      for the destination, a one-line console notice names both values (`make doctor` WARNs until
 ///      reconciled) and the closing output prints the exact `make add-lane` remediation command.
-///   2. Env vars unset → the declared `lanes{}` policy in `config/chains/<local>.json` supplies the
+///   2. Env vars unset → the declared `lanes{}` policy in `project/<local>.json` supplies the
 ///      bucket: `capacity`/`rate` drive the outbound bucket (enabled iff either is non-zero, the
 ///      same inference the doctor's lanes rung uses); the optional `inbound{capacity,rate}` block
 ///      drives the inbound bucket, and an ABSENT inbound block keeps the env-absent default
@@ -531,20 +532,33 @@ contract ApplyChainUpdates is EoaExecutor {
             dest.rawPoolAddress = vm.toString(destPoolAddr);
             dest.rawTokenAddress = vm.toString(destTokenAddr);
         } else {
-            // DEST_TOKEN_POOL takes priority; fall back to <DEST_CHAIN>_TOKEN_POOL (e.g. SOLANA_DEVNET_TOKEN_POOL).
-            string memory chainSpecificPool = vm.envOr(string.concat(destChainName, "_TOKEN_POOL"), string(""));
-            dest.rawPoolAddress = vm.envOr("DEST_TOKEN_POOL", chainSpecificPool);
+            // Non-EVM remote (e.g. Solana): the base58 pool/token now resolve from the PROJECT STORE
+            // (project/<dest-selectorName>.json addresses.active, declared via `make adopt-token`), not
+            // an ephemeral env var. `getDeployed*String` already applies chain-scoped env > store; the
+            // inline `DEST_TOKEN_POOL`/`DEST_TOKEN` override still wins.
+            string memory destSelectorName = helperConfig.getSelectorNameBySelector(chainSelector);
+            dest.rawPoolAddress = vm.envOr("DEST_TOKEN_POOL", helperConfig.getDeployedTokenPoolString(destSelectorName));
             require(
                 bytes(dest.rawPoolAddress).length > 0,
-                string.concat("Destination pool not set. Set DEST_TOKEN_POOL or ", destChainName, "_TOKEN_POOL.")
+                string.concat(
+                    "Destination pool not set. Declare it in the store (make adopt-token CHAIN=",
+                    destSelectorName,
+                    " TOKEN_B58=<base58> POOL_B58=<base58>), or set DEST_TOKEN_POOL / ",
+                    destChainName,
+                    "_TOKEN_POOL."
+                )
             );
 
-            // DEST_TOKEN takes priority; fall back to <DEST_CHAIN>_TOKEN (e.g. SOLANA_DEVNET_TOKEN).
-            string memory chainSpecificToken = vm.envOr(string.concat(destChainName, "_TOKEN"), string(""));
-            dest.rawTokenAddress = vm.envOr("DEST_TOKEN", chainSpecificToken);
+            dest.rawTokenAddress = vm.envOr("DEST_TOKEN", helperConfig.getDeployedTokenString(destSelectorName));
             require(
                 bytes(dest.rawTokenAddress).length > 0,
-                string.concat("Destination token not set. Set DEST_TOKEN or ", destChainName, "_TOKEN.")
+                string.concat(
+                    "Destination token not set. Declare it in the store (make adopt-token CHAIN=",
+                    destSelectorName,
+                    " TOKEN_B58=<base58>), or set DEST_TOKEN / ",
+                    destChainName,
+                    "_TOKEN."
+                )
             );
         }
 
@@ -734,8 +748,9 @@ contract ApplyChainUpdates is EoaExecutor {
         (res.outboundFromEnv, res.outbound) = _envBucket("OUTBOUND");
         (res.inboundFromEnv, res.inbound) = _envBucket("INBOUND");
 
-        string memory json;
-        (res.configFound, res.configName, json) = _findLocalChainConfig();
+        // Chain existence + name from config/chains; the lanes{} policy from the project store.
+        (res.configFound, res.configName,) = _findLocalChainConfig();
+        string memory json = _localProjectJson(res.configName);
         if (res.configFound) res.lane = _findDeclaredLane(json, destChainName, destChainSelector);
 
         // Rung 2: a direction with no env vars takes the declared lanes{} policy. An absent
@@ -768,7 +783,7 @@ contract ApplyChainUpdates is EoaExecutor {
         }
     }
 
-    /// @dev Reads one direction's rate-limit env vars — byte-for-byte the historical env behavior:
+    /// @dev Reads one direction's rate-limit env vars:
     ///      isEnabled defaults to true when CAPACITY or RATE is set, ENABLED overrides it
     ///      explicitly, and a disabled bucket zeroes its values. `provided` is true when ANY of the
     ///      direction's env vars is set (the rung-1 trigger).
@@ -804,6 +819,19 @@ contract ApplyChainUpdates is EoaExecutor {
         bool declaredEnabled = declaredCapacity != 0 || declaredRate != 0;
         if (applied.isEnabled != declaredEnabled) return true;
         return applied.isEnabled && (applied.capacity != declaredCapacity || applied.rate != declaredRate);
+    }
+
+    /// @dev The local chain's project store (`project/<name>.json`), which holds the `lanes{}` subtree
+    ///      the ladder resolves; the empty JSON object `"{}"` when the chain has no project file yet (read
+    ///      as "no lane declared"). The `"{}"` sentinel (NOT `""`) is deliberate: `keyExistsJson("", …)`
+    ///      REVERTS ("EOF while parsing"), whereas `keyExistsJson("{}", …)` returns false. Mirrors
+    ///      `LanePolicySource._localProjectJson` — the duplication is deliberate (see the contract
+    ///      natspec); keep the two BYTE-mirrored.
+    function _localProjectJson(string memory name) internal view returns (string memory) {
+        string memory p = ProjectStore.path(name);
+        if (!vm.exists(p)) return "{}";
+        string memory data = vm.readFile(p);
+        return bytes(data).length == 0 ? "{}" : data;
     }
 
     /// @dev The local chain's config file (matched on the declared `chainId` == block.chainid),
@@ -928,15 +956,15 @@ contract ApplyChainUpdates is EoaExecutor {
     /// @dev The resolution-ladder console lines: which rung supplied the buckets, and the
     ///      per-direction divergence notice (a notice, not a revert) naming both values and the
     ///      lane entry.
-    function _logRateLimitResolution(RateLimitResolution memory res, string memory destChainName) internal pure {
+    function _logRateLimitResolution(RateLimitResolution memory res, string memory destChainName) internal view {
         if (res.outboundFromLanes || res.inboundFromLanes) {
             console.log(
                 string.concat(
                     "  Rate limits resolved from lanes.",
                     res.lane.key,
-                    " in config/chains/",
-                    res.configName,
-                    ".json (",
+                    " in ",
+                    ProjectStore.display(res.configName),
+                    " (",
                     res.outboundFromLanes ? (res.inboundFromLanes ? "outbound + inbound" : "outbound") : "inbound",
                     ")"
                 )
@@ -947,7 +975,7 @@ contract ApplyChainUpdates is EoaExecutor {
                 string.concat(
                     "  No rate-limit env vars and no lanes{} entry for ",
                     destChainName,
-                    res.configFound ? string.concat(" in config/chains/", res.configName, ".json") : "",
+                    res.configFound ? string.concat(" in ", ProjectStore.display(res.configName)) : "",
                     "; rate limiting disabled (default). Set the env vars, or declare the lane: make add-lane"
                 )
             );
@@ -968,7 +996,7 @@ contract ApplyChainUpdates is EoaExecutor {
         uint256 declaredCapacity,
         uint256 declaredRate,
         RateLimitResolution memory res
-    ) internal pure returns (string memory) {
+    ) internal view returns (string memory) {
         return string.concat(
             unicode"  ⚠️  ",
             direction,
@@ -984,9 +1012,9 @@ contract ApplyChainUpdates is EoaExecutor {
             vm.toString(declaredCapacity),
             " rate=",
             vm.toString(declaredRate),
-            ") in config/chains/",
-            res.configName,
-            ".json - make doctor will WARN until reconciled"
+            ") in ",
+            ProjectStore.display(res.configName),
+            " - make doctor will WARN until reconciled"
         );
     }
 
@@ -994,25 +1022,25 @@ contract ApplyChainUpdates is EoaExecutor {
     ///      this hint plus the doctor WARN close the loop through a reviewed edit by design. Note
     ///      `make add-lane` skips an EXISTING entry (duplicate = byte-identical no-op), so the
     ///      divergence variant names the hand edit first.
-    function _logAddLaneHint(RateLimitResolution memory res) internal pure {
+    function _logAddLaneHint(RateLimitResolution memory res) internal view {
         if (!res.addLaneHint) return;
         if (res.lane.found) {
             console.log(
                 string.concat(
                     unicode"⚠️  Applied rate limits diverge from declared lanes.",
                     res.lane.key,
-                    " in config/chains/",
-                    res.configName,
-                    ".json. Reconcile the declaration: edit the entry to the applied values, or remove it and run: ",
+                    " in ",
+                    ProjectStore.display(res.configName),
+                    ". Reconcile the declaration: edit the entry to the applied values, or remove it and run: ",
                     res.addLaneCommand
                 )
             );
         } else {
             console.log(
                 string.concat(
-                    unicode"⚠️  This lane is not declared in lanes{} (config/chains/",
-                    res.configName,
-                    ".json). Declare it: ",
+                    unicode"⚠️  This lane is not declared in lanes{} (",
+                    ProjectStore.display(res.configName),
+                    "). Declare it: ",
                     res.addLaneCommand
                 )
             );

@@ -9,6 +9,7 @@ import {IOwner} from "@chainlink/contracts-ccip/contracts/interfaces/IOwner.sol"
 import {PoolVersion} from "../utils/PoolVersion.s.sol";
 import {DeploymentUtils} from "../utils/DeploymentUtils.s.sol";
 import {RegistryWriter} from "../../src/utils/RegistryWriter.sol";
+import {ProjectStore} from "../../src/utils/ProjectStore.sol";
 
 /// @notice Adopts an externally deployed token (and optionally its pool) into the address registry,
 /// so contracts this repo did NOT deploy resolve exactly like the ones it did (the zero-export
@@ -31,6 +32,7 @@ contract AdoptToken is Script {
 
     /// @dev Everything validated about the adoption, resolved before any write.
     struct AdoptPlan {
+        string selectorName; // the config/chains basename == the project-store basename
         uint256 chainId;
         address token;
         address pool;
@@ -62,10 +64,11 @@ contract AdoptToken is Script {
         );
 
         AdoptPlan memory plan = validateAdoption(json, chainId, token, pool);
+        plan.selectorName = name;
         recordAdoption(plan);
 
         console.log("");
-        console.log(string.concat(unicode"✅ Adopted into addresses/", vm.toString(chainId), ".json"));
+        console.log(string.concat(unicode"✅ Adopted into ", ProjectStore.display(name)));
         console.log("Next steps:");
         if (bytes(plan.adminPath).length > 0) {
             console.log(
@@ -146,15 +149,58 @@ contract AdoptToken is Script {
     ///         symbol (and the pool's on-chain type and version) plus the `active.<role>` pointers,
     ///         through the same single-writer path the deploy scripts use.
     function recordAdoption(AdoptPlan memory plan) public {
-        RegistryWriter.recordDeterministic(plan.chainId, "token", string.concat(plan.tokenSymbol, "_Token"), plan.token);
+        RegistryWriter.recordDeterministic(
+            plan.selectorName, "token", string.concat(plan.tokenSymbol, "_Token"), plan.token
+        );
         if (plan.pool != address(0)) {
             RegistryWriter.recordDeterministic(
-                plan.chainId,
+                plan.selectorName,
                 "tokenPool",
                 string.concat(plan.tokenSymbol, "_", _spacesToUnderscores(plan.poolTypeAndVersion)),
                 plan.pool
             );
         }
+    }
+
+    /// @notice **Non-EVM (base58) adopt path** — declare a project's Solana-side (or other non-EVM)
+    /// token and pool as base58 strings into `project/<selectorName>.json`, so an EVM pool's
+    /// `applyChainUpdates` can take the remote from the reviewed store instead of an ephemeral
+    /// `DEST_TOKEN_POOL` env var. This repo forks EVM only, so there is NO on-chain probe here: the
+    /// values are family-validated (base58 → exactly 32 bytes, via `RegistryWriter`) and recorded. The
+    /// `run(string,address,address)` EVM signature cannot carry base58; this is its string-typed peer.
+    ///   make adopt-token CHAIN=<solana-chain> TOKEN_B58=<base58> [POOL_B58=<base58>]
+    ///
+    /// The base58 value is checked ONLY to be a valid 32-byte key - it is NOT verified to be the right
+    /// account. `POOL_B58` must be the account the remote chain's CCIP wiring expects as the remote
+    /// pool address (for Solana, the pool's config account - not the pool program id or the token mint);
+    /// a wrong-but-valid 32-byte key passes here but fails when a message is executed.
+    ///
+    /// Optional off-chain sanity check (advisory - this repo forks EVM only). Once the Solana side is
+    /// deployed, stock CLIs confirm the values before wiring the lane:
+    ///   solana account <POOL_B58> --url <cluster> --output json   # want: exists, executable:false,
+    ///                                                             # owner == the CCIP pool program id
+    ///   spl-token display <TOKEN_B58> --url <cluster>             # want: an SPL/Token-2022 mint
+    /// A wrong key fails distinctly: the pool signer PDA -> AccountNotFound; the pool program id ->
+    /// executable:true; the mint passed as the pool -> owner is a token program. Before the Solana side
+    /// is deployed the account does not exist yet (AccountNotFound is expected), so this stays advisory.
+    function runNonEvm(string memory name, string memory tokenBase58, string memory poolBase58) external {
+        string memory path = string.concat(CONFIG_DIR, name, ".json");
+        require(vm.exists(path), string.concat("no ", path, " - onboard the chain first: make add-chain"));
+        string memory json = vm.readFile(path);
+        require(
+            keccak256(bytes(vm.parseJsonString(json, ".chainFamily"))) != keccak256(bytes("evm")),
+            string.concat(name, " is an EVM chain - use the address-typed run(string,address,address) path")
+        );
+        require(bytes(tokenBase58).length != 0, "TOKEN_B58 is required");
+
+        // RegistryWriter family-validates against config .chainFamily (base58 -> 32 bytes) and seeds
+        // the project skeleton if absent.
+        RegistryWriter.recordDeterministicString(name, "token", string.concat(name, "_token"), tokenBase58);
+        if (bytes(poolBase58).length != 0) {
+            RegistryWriter.recordDeterministicString(name, "tokenPool", string.concat(name, "_tokenPool"), poolBase58);
+        }
+        console.log(string.concat(unicode"✅ Declared non-EVM artifacts into ", ProjectStore.display(name)));
+        console.log("  These base58 remotes now feed applyChainUpdates from the store (no env var needed).");
     }
 
     /// @dev Reads back and reports the TokenAdminRegistry state for the token; never reverts (a

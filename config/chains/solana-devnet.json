@@ -9,7 +9,6 @@
     "tokenAdminRegistry": "0x0000000000000000000000000000000000000000",
     "tokenPoolFactory": "0x0000000000000000000000000000000000000000"
   },
-  "ccipBnM": "0x0000000000000000000000000000000000000000",
   "chainFamily": "svm",
   "chainId": "0",
   "chainNameIdentifier": "SOLANA_DEVNET",

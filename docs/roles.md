@@ -1,8 +1,11 @@
 # Roles: the authority durable store and reconciliation
 
+> Owner: docs-cct-foundry maintainers · Last reviewed: 2026-07-15 · Applies to: the `project/` layout
+> (schema 3).
+
 This deployment's **privileged authority** - who can mint, burn, re-point the pool, throttle a lane,
-move liquidity, or change which verifiers a message requires - is declared in the git-tracked
-`roles{}` subtree of each `config/chains/<name>.json`, and reconciled against the live chain by
+move liquidity, or change which verifiers a message requires - is declared in the `roles{}` subtree of
+each chain's project store (`project/<selectorName>.json`), and reconciled against the live chain by
 tooling. This doc makes the model operationally unambiguous: what the store is, which command reads
 and which writes, what to do when they disagree, and exactly how much assurance a clean check gives.
 
@@ -16,8 +19,9 @@ this doc covers the durable store and its reconciliation.
 
 ## The mental model, stated plainly
 
-- **`roles{}` in git is the DECLARED intent** - the authority the chain _should_ have. It is reviewed
-  in a pull request, so a change to who controls the deployment is a diff a human approved.
+- **`roles{}` in the project store is the DECLARED intent** - the authority the chain _should_ have. When
+  a fork tracks `project/`, it is reviewed in a pull request, so a change to who controls the deployment is
+  a diff a human approved.
 - **The chain is reality** - who _actually_ holds each role right now.
 - **"Reconcile" means DETECT divergence between the two and report it.** It is **not** an auto-fix:
   the tooling never moves a role. It tells you the declaration and the chain disagree, and names the
@@ -80,10 +84,10 @@ never read and never a FAIL.
 
 ## The two directions, and which one writes
 
-| Command                          | Reads | Writes                | Exit contract                                  |
-| -------------------------------- | ----- | --------------------- | ---------------------------------------------- |
-| `make roles-check CHAIN=<name>`  | live chain + the declaration | **nothing** | `0` clean / `1` drift (names the field) / `2` RPC unavailable |
-| `make snapshot-chain CHAIN=<name>` | live chain | **only** the `.roles` subtree of that chain's config | writes the declaration; canonicalizes the file |
+| Command                            | Reads                        | Writes                                                      | Exit contract                                                 |
+| ---------------------------------- | ---------------------------- | ----------------------------------------------------------- | ------------------------------------------------------------- |
+| `make roles-check CHAIN=<name> [GROUP=<g>]`    | live chain + the declaration | **nothing**                                      | `0` clean / `1` drift (names the field) / `2` RPC unavailable |
+| `make snapshot-chain CHAIN=<name> [GROUP=<g>]` | live chain                   | **only** the `.roles` subtree of that chain's project store | writes the declaration; canonicalizes the file    |
 
 - **`make roles-check` is READ-ONLY.** It reads the live chain, compares to the declaration, prints one
   aligned `[PASS]`/`[FAIL]`/`[WARN]`/`[SKIP]` line per field, and exits `0`/`1`/`2`. It **never** writes
@@ -99,16 +103,16 @@ never read and never a FAIL.
 Bootstrap a chain that has no `roles{}` yet:
 
 ```bash
-make snapshot-chain CHAIN=ethereum-testnet-sepolia   # writes the .roles block from the live chain
-git diff config/chains/ethereum-testnet-sepolia.json  # review who holds what — this is the audit artifact
-make roles-check CHAIN=ethereum-testnet-sepolia       # should now report CLEAN (exit 0)
+make snapshot-chain CHAIN=ethereum-testnet-sepolia    # writes the .roles block from the live chain
+git diff project/ethereum-testnet-sepolia.json        # review who holds what — the audit artifact (once a fork tracks project/)
+make roles-check CHAIN=ethereum-testnet-sepolia        # should now report CLEAN (exit 0)
 ```
 
 To prove a non-enumerable minter/burner list is complete (not just a candidate seed), run the event
 scan. It marks the list `complete: true` only if the `eth_getLogs` scan succeeds over the range **and**
 you pass a `fromBlock` at or before the token's deploy block (otherwise holders granted before
 `fromBlock` and never re-touched are missed). The snapshot records the block it scanned from as
-`scannedFromBlock` next to `complete`, so the completeness is legible as a proof *as of that block*:
+`scannedFromBlock` next to `complete`, so the completeness is legible as a proof _as of that block_:
 
 ```bash
 SCAN_FROM_BLOCK=<token-deploy-block> make snapshot-chain CHAIN=ethereum-testnet-sepolia
@@ -116,8 +120,24 @@ SCAN_FROM_BLOCK=<token-deploy-block> make snapshot-chain CHAIN=ethereum-testnet-
 
 A failed scan (an RPC that caps the `eth_getLogs` range) degrades to candidates with a logged SKIP and
 `complete: false` - never a silently partial "complete" list. **`complete: true` is a point-in-time
-proof, not a live invariant:** a grant made *after* `scannedFromBlock`..snapshot is not reflected until
+proof, not a live invariant:** a grant made _after_ `scannedFromBlock`..snapshot is not reflected until
 you re-snapshot (or run `roles-check` with `SCAN_FROM_BLOCK`, see the additive-detection note below).
+
+## Token-group scope
+
+A clone can hold several token groups, each in its own project-store directory (see
+[`config-schema.md`](./config-schema.md#the-project-store---projectselectornamejson)). `GROUP=<g>` scopes an
+authority command to one group's store (`project/<g>/<selectorName>.json`); unset is the flat default group,
+with one deliberate exception for the read check:
+
+- **`make snapshot-chain CHAIN=<name> GROUP=<g>`** and **`make doctor CHAIN=<name> GROUP=<g>`** each act on
+  the one named group (unset = the default group).
+- **`make roles-check GROUP=<g>`** scopes to that one group. With **`GROUP` unset it does not stop at the
+  default group** - it reconciles the default group AND every `project/<group>/` subdirectory, prefixing
+  each result line with `[group: <g>]` (the default group is labelled `[group: default]`), so a grouped
+  token is never silently skipped.
+- **`make roles-check-all`** sweeps every chain that declares `roles{}` across all token groups, under the
+  same exit contract as `roles-check`.
 
 ## The drift-response runbook
 
@@ -137,12 +157,12 @@ flowchart TD
   R2 --> V
 ```
 
-- **(0) Containment first (severity triage).** Before deciding intended-vs-unintended, check *what*
+- **(0) Containment first (severity triage).** Before deciding intended-vs-unintended, check _what_
   drifted. If `pool.owner`, `tokenAdminRegistry.administrator`, a mint/burn holder, or
   `hooks.owner`/`policyEngine` moved to an address outside your known-good set, treat it as a **potential
   compromise**: use the emergency-throttle authority (`rateLimitAdmin`, held on the Safe by convention -
   the auditor WARNs when it is not) to **throttle the affected lane immediately** and freeze any pending
-  two-step transfer, *then* root-cause. A rogue mint/burn or owner move is exfiltration risk; contain
+  two-step transfer, _then_ root-cause. A rogue mint/burn or owner move is exfiltration risk; contain
   before you investigate.
 - **(a) The CHAIN drifted** - an unauthorized role move. Remediate **on-chain** (transfer the role
   back, `setPool` back, a corrective `setDynamicConfig`, or re-run the handoff step) until the live chain
@@ -177,13 +197,13 @@ For a role-holder list, there are two ways it can be wrong, and the engine detec
   template - each declared holder is a direct `hasRole`/getter point-check.
 - **An UNDECLARED holder was ADDED** (a rogue `MINTER_ROLE`/`DEFAULT_ADMIN_ROLE` grant): **detected only
   when the live set is knowable** -
-    - `factory` and any `AccessControlEnumerable` token → **always** (two-sided set compare against the
-      live enumeration);
-    - `crosschain` / `burnmint` (non-enumerable) → **only when you run `roles-check` with
-      `SCAN_FROM_BLOCK`** (an opt-in event-scan two-sided compare). Without it, the default reconcile
-      verifies declared-holders-hold and **WARNs** that additive grants are unverified - it never
-      reports a silent CLEAN over the gap, even when the list is `complete: true` (that completeness was
-      proven at snapshot time, not now).
+  - `factory` and any `AccessControlEnumerable` token → **always** (two-sided set compare against the
+    live enumeration);
+  - `crosschain` / `burnmint` (non-enumerable) → **only when you run `roles-check` with
+    `SCAN_FROM_BLOCK`** (an opt-in event-scan two-sided compare). Without it, the default reconcile
+    verifies declared-holders-hold and **WARNs** that additive grants are unverified - it never
+    reports a silent CLEAN over the gap, even when the list is `complete: true` (that completeness was
+    proven at snapshot time, not now).
 
 So: **a `crosschain`/`burnmint` CLEAN on a default (no-scan) run does not prove that no rogue mint/admin
 grant exists.** For that assurance, run `SCAN_FROM_BLOCK=<deploy-block> make roles-check CHAIN=<name>`
@@ -208,9 +228,9 @@ on an RPC that serves the log range, which turns the additive check into a hard 
 ## The snapshot forward-intent footgun
 
 `make snapshot-chain` records an **already-executed** state: it backfills the declaration FROM the current
-chain. It cannot express a change you *intend* to make but have not executed yet. So if you are about to
+chain. It cannot express a change you _intend_ to make but have not executed yet. So if you are about to
 move a role and want the declaration to lead the change (declare-then-execute), that first edit is a
 **hand edit**, not a snapshot - running `snapshot-chain` before the on-chain move would silently overwrite
 your forward-intent declaration back to the current (pre-change) chain state. Use `snapshot-chain` for the
-initial bootstrap and for a *post-hoc* resync after an intended change has landed on-chain; use a reviewed
+initial bootstrap and for a _post-hoc_ resync after an intended change has landed on-chain; use a reviewed
 hand edit when the declaration must precede the on-chain move.

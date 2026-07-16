@@ -11,21 +11,26 @@ Every target is a thin wrapper defined in the repo [`Makefile`](../Makefile); th
 `FOUNDRY_PROFILE=sync` (which enables `ffi` for the `curl`+`jq` API fetch) is set **inside** the recipes
 that need it, never exported. Targets that touch the API need only `curl` + `jq` - no RPC URL, no keystore.
 
-| `make` target                         | Purpose                                                              | Args                          | Runs underneath                                                                 |
-| ------------------------------------- | ------------------------------------------------------------------- | ----------------------------- | ------------------------------------------------------------------------------- |
-| `help` (default)                      | List every target with its one-line purpose                         | -                             | `awk` over the `Makefile`                                                        |
-| `tools`                               | Check `forge` / `curl` / `jq` are installed                         | -                             | `command -v` preflight                                                           |
-| `discover`                            | List the CCIP API testnet catalog joined against local configs      | `FILTER=<term>` (optional)    | `bash script/config/sync-discover.sh`                                           |
-| `add-chain`                           | Generate `config/chains/<CHAIN>.json` from the live API, then sync  | `CHAIN=` **+** `SELECTOR=` (both required) | `SyncCcipConfig.s.sol --sig "init(string,uint256)" <CHAIN> <SELECTOR>` → canonicalize |
-| `add-lane`                            | Append a `lanes{}` policy entry LOCAL → REMOTE (writes **only** the `lanes` subtree; no API fetch) | `LOCAL=` `REMOTE=` `CAPACITY=` `RATE=` (all required); `INBOUND_CAPACITY=` + `INBOUND_RATE=` (paired, optional) add the `inbound{}` block; `BOTH=1` adds the reciprocal | `SyncCcipConfig.s.sol --sig "addLane(string,string,uint256,uint256)" <LOCAL> <REMOTE> <CAP> <RATE>` (6-arg overload with the inbound pair; twice with `BOTH=1`) → canonicalize both files |
-| `remove-lane`                         | Remove a `lanes{}` policy entry LOCAL → REMOTE (undo of `add-lane`; writes **only** the `lanes` subtree, declaration only - an applied lane must also be removed on-chain via `RemoveChain`, or `RemoveRemotePool` for a single pool) | `LOCAL=` `REMOTE=` (both required); `BOTH=1` removes the reciprocal | `SyncCcipConfig.s.sol --sig "removeLane(string,string)" <LOCAL> <REMOTE>` (twice with `BOTH=1`) → canonicalize both files |
-| `adopt-token`                         | Adopt an externally deployed token (and optionally its pool) into the address registry after on-chain validation (needs the chain's `rpcEnv` RPC; see [`enabling-existing-token.md`](enabling-existing-token.md)) | `CHAIN=` **+** `TOKEN=` (both required); `TOKEN_POOL=` optional | `AdoptToken.s.sol --sig "run(string,address,address)" <CHAIN> <TOKEN> <TOKEN_POOL or 0x0>` |
-| `sync`                                | Refresh one chain's API-served fields (`ccip{}` + identity/metadata) from the API | `CHAIN=` (required) | `SyncCcipConfig.s.sol --sig "run(string)" <CHAIN>` → canonicalize                |
-| `sync-preview`                        | Fetch + log a chain's `ccip{}` from the API **without writing**     | `CHAIN=` (required)           | `SyncCcipConfig.s.sol --sig "preview(string)" <CHAIN>`                           |
-| `sync-all`                            | Refresh every configured chain (non-EVM SKIP; failures collected)   | -                             | loops `--sig "run(string)"` over `config/chains/*.json` + canonicalize each      |
-| `sync-check`                          | Read-only drift check vs the live API (pass/fail via make)          | `CHAIN=` (optional)           | `bash script/config/sync-check.sh [<CHAIN>]` → `SyncCcipConfig --sig "check(string)"` |
-| `doctor`                              | Layered single-chain verification (schema → API → RPC → on-chain → registry → mesh → lanes) | `CHAIN=` (required) | `VerifyChain.s.sol --tc VerifyChain --sig "run(string)" <CHAIN>`           |
-| `fmt-config`                          | Rewrite `config/chains/*.json` in the canonical `jq --indent 2 -S` style | -                        | `jq` over every config file                                                      |
+| `make` target    | Purpose                                                                                                                                                                                                                               | Args                                                                                                                                                                    | Runs underneath                                                                                                                                                                           |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `help` (default) | List every target with its one-line purpose                                                                                                                                                                                           | -                                                                                                                                                                       | `awk` over the `Makefile`                                                                                                                                                                 |
+| `tools`          | Check `forge` / `curl` / `jq` are installed                                                                                                                                                                                           | -                                                                                                                                                                       | `command -v` preflight                                                                                                                                                                    |
+| `discover`       | List the CCIP API testnet catalog joined against local configs                                                                                                                                                                        | `FILTER=<term>` (optional)                                                                                                                                              | `bash script/config/sync-discover.sh`                                                                                                                                                     |
+| `add-chain`      | Generate `config/chains/<CHAIN>.json` from the live API, then sync                                                                                                                                                                    | `CHAIN=` **+** `SELECTOR=` (both required)                                                                                                                              | `SyncCcipConfig.s.sol --sig "init(string,uint256)" <CHAIN> <SELECTOR>` → canonicalize                                                                                                     |
+| `add-lane`       | Append a `lanes{}` policy entry LOCAL → REMOTE (writes **only** the `lanes` subtree; no API fetch)                                                                                                                                    | `LOCAL=` `REMOTE=` `CAPACITY=` `RATE=` (all required); `INBOUND_CAPACITY=` + `INBOUND_RATE=` (paired, optional) add the `inbound{}` block; `BOTH=1` adds the reciprocal; `GROUP=` (optional) scopes to a token group | `SyncCcipConfig.s.sol --sig "addLane(string,string,uint256,uint256)" <LOCAL> <REMOTE> <CAP> <RATE>` (6-arg overload with the inbound pair; twice with `BOTH=1`) → canonicalize both files |
+| `remove-lane`    | Remove a `lanes{}` policy entry LOCAL → REMOTE (undo of `add-lane`; writes **only** the `lanes` subtree, declaration only - an applied lane must also be removed on-chain via `RemoveChain`, or `RemoveRemotePool` for a single pool) | `LOCAL=` `REMOTE=` (both required); `BOTH=1` removes the reciprocal; `GROUP=` (optional) scopes to a token group                                                        | `SyncCcipConfig.s.sol --sig "removeLane(string,string)" <LOCAL> <REMOTE>` (twice with `BOTH=1`) → canonicalize both files                                                                 |
+| `adopt-token`    | Adopt an externally deployed token (and optionally its pool) into the project store's `addresses{}` after on-chain validation (needs the chain's `rpcEnv` RPC; see [`enabling-existing-token.md`](enabling-existing-token.md))        | EVM: `CHAIN=` **+** `TOKEN=` (both required), `TOKEN_POOL=` optional. Non-EVM: `CHAIN=` **+** `TOKEN_B58=`, `POOL_B58=` optional. `GROUP=` (optional) scopes to a token group | EVM: `AdoptToken.s.sol --sig "run(string,address,address)" <CHAIN> <TOKEN> <TOKEN_POOL or 0x0>`. Non-EVM: `--sig "runNonEvm(string,string,string)" <CHAIN> <TOKEN_B58> <POOL_B58>`        |
+| `sync`           | Refresh one chain's API-served fields (`ccip{}` + identity/metadata) from the API                                                                                                                                                     | `CHAIN=` (required)                                                                                                                                                     | `SyncCcipConfig.s.sol --sig "run(string)" <CHAIN>` → canonicalize                                                                                                                         |
+| `sync-preview`   | Fetch + log a chain's `ccip{}` from the API **without writing**                                                                                                                                                                       | `CHAIN=` (required)                                                                                                                                                     | `SyncCcipConfig.s.sol --sig "preview(string)" <CHAIN>`                                                                                                                                    |
+| `sync-all`       | Refresh every configured chain (non-EVM SKIP; failures collected)                                                                                                                                                                     | -                                                                                                                                                                       | loops `--sig "run(string)"` over `config/chains/*.json` + canonicalize each                                                                                                               |
+| `sync-check`     | Read-only drift check vs the live API (pass/fail via make)                                                                                                                                                                            | `CHAIN=` (optional)                                                                                                                                                     | `bash script/config/sync-check.sh [<CHAIN>]` → `SyncCcipConfig --sig "check(string)"`                                                                                                     |
+| `doctor`         | Layered single-chain verification (schema → API → RPC → on-chain → registry → mesh → lanes → roles)                                                                                                                                           | `CHAIN=` (required); `GROUP=` (optional) scopes to a token group                                                                                                       | `VerifyChain.s.sol --tc VerifyChain --sig "run(string)" <CHAIN>`                                                                                                                          |
+| `fmt-config`     | Repair the canonical JSON of **both** stores: `config/chains/*.json` (`jq --indent 2 -S`, trailing newline) and the project store in every group (`project/*.json` **and** `project/*/*.json`, `jq --indent 2 -S`, **no** trailing newline). Repair tool only - never a required step | -                                                                                                                                                       | `jq` over every config + project file (all groups)                                                                                                                                       |
+
+| `snapshot-chain` | Backfill the declared `roles{}` authority block FROM the live chain into the project store (the bootstrap for `roles-check`; see [`roles.md`](roles.md)) | `CHAIN=` (required); `GROUP=` (optional) scopes to a token group; `TOKEN=` `TOKEN_POOL=` `TAR=` `SCAN_FROM_BLOCK=` (optional overrides) | `SnapshotChain.s.sol --sig "run(string)" <CHAIN>` → canonicalize the project file. Exit: pass/fail via make |
+| `roles-check`    | READ-ONLY reconcile of a chain's declared `roles{}` vs the live chain (see [`roles.md`](roles.md)). Make remaps the script's exit code to pass/fail; CI calls the script directly for the full contract: 0 `CLEAN` / 1 `ROLES_DRIFT` / 2 `RPC_UNAVAILABLE` | `CHAIN=` (optional - no arg checks every declaring chain); `GROUP=` (optional) scopes to one token group | `bash script/config/roles-check.sh [<CHAIN>]` → `RolesCheck.s.sol --sig "run(string)"` per chain |
+| `roles-check-all`| The same reconcile for every chain that declares `roles{}`, across the default group AND every `project/<group>/` (exit contract as above) | - | `bash script/config/roles-check.sh` (no args, no group filter) |
+| `clean-scratch`  | Remove test-scratch fixtures (`zz-scratch-*`, `zz-tt-*`, `local-*`) from `config/chains`, `project`, and `history` via explicit patterns - never `git clean -X`, which would also delete real gitignored project state | - | explicit `rm` patterns |
 
 `CHAIN=` is always the chain's **canonical CCIP selectorName** (the file basename; validated against the
 API - see [`config-schema.md`](config-schema.md#the-file-name-is-the-canonical-ccip-selectorname)).
@@ -83,8 +88,8 @@ flowchart TD
 `make sync` fetches the per-chain config, selects the single `isActive` entry per contract type, validates
 identity, then rewrites **every API-served field** - the `.ccip` subtree AND the API-served identity/metadata
 (`displayName`, `chainFamily`, `environment`, `explorerUrl`, `nativeCurrencySymbol`) - and re-canonicalizes,
-so a no-drift sync is a zero-diff no-op. The hand-authored keys (`chainNameIdentifier`, `rpcEnv`,
-`confirmations`, `ccipBnM`) and the guarded join keys are left untouched.
+so a no-drift sync is a zero-diff no-op. The three hand-authored keys (`chainNameIdentifier`, `rpcEnv`,
+`confirmations`) and the guarded join keys are left untouched.
 
 ```mermaid
 %%{init: {'theme':'base','themeVariables':{'primaryColor':'#375BD2','primaryTextColor':'#FFFFFF','primaryBorderColor':'#1A2B6B','lineColor':'#375BD2','actorBkg':'#375BD2','actorTextColor':'#FFFFFF','actorBorder':'#1A2B6B','signalColor':'#1A2B6B','signalTextColor':'#0B1636','noteBkgColor':'#E8EDFB','noteTextColor':'#0B1636','noteBorderColor':'#375BD2','fontFamily':'Inter, system-ui, sans-serif'}}}%%
@@ -99,91 +104,111 @@ sequenceDiagram
     A-->>B: chainConfig (versioned entries)
     B-->>S: flat JSON (isActive per type + apiName + identity/metadata)
     Note over S: _requireIdentity: chainId matches<br/>_requireSelectorName: name == apiName
-    S->>S: vm.writeJson(...) - .ccip subtree<br/>+ displayName/chainFamily/environment/<br/>explorerUrl/nativeCurrencySymbol
+    S->>S: vm.writeJson(...) - .ccip subtree<br/>+ displayName/chainFamily/environment/<br/>explorerUrl/nativeCurrencySymbol<br/>(3 hand keys preserved: chainNameIdentifier/rpcEnv/confirmations)
     S-->>M: wrote .ccip block + metadata
     Note over M: canonicalize jq --indent 2 -S<br/>no drift => ZERO git diff
     Note over M,A: sync-check reuses this path read-only<br/>exit 0 clean · 1 drift · 2 API-down
 ```
 
-### 3. One-writer-per-field store model
+### 3. Two files, three writers per subtree
 
-The **git-tracked** `config/chains/*.json` is a durable, versioned store; each field has exactly one writer,
-so a git diff is an unambiguous audit artifact. **Everything the CCIP REST API serves is API-owned** - the
-`ccip{}` addresses AND the identity/metadata fields (`displayName`, `chainFamily`, `environment`,
-`explorerUrl`, `nativeCurrencySymbol`); the **`lanes{}` subtree is owner POLICY** (which remotes, at what
-outbound rate limits), written by `make add-lane` and never by the sync; only the keys the API serves
-nothing for (`chainNameIdentifier`, `rpcEnv`, `confirmations`, `ccipBnM`) are hand-authored; the join keys
-(`name`/`chainSelector`/`chainId`) are seeded once and guard-validated. (The `roles` subtree below is the
-general model - the governance-written privileged-role surface - and is deferred to a follow-up PR.)
+Project state lives in two files per chain, both keyed by the canonical **selectorName**:
 
-**The deployed-address registry is separate and NOT git-tracked.** `addresses/<chainId>.json` is
-**gitignored** and local to the machine that ran the deploy (a fresh clone / CI has none), so its history is
-not a git audit trail. Its integrity comes instead from a **single writer**: each deploy script makes ONE
-call to `script/utils/DeploymentRecorder.s.sol` per artifact, and that one call writes **both** stores it
-touches - the detailed `script/deployments/**` ledger (via `DeploymentUtils.save*`, format unchanged) **and**
-the registry (`deployments[name]` + `active[role]`, via `RegistryWriter`). Because one writer owns both, the
-ledger and the registry cannot drift. The registry is the only address store read back (by `HelperConfig`
-resolution and the redeploy guard); the ledger is write-only history. `active.<role>` records the
-most-recently-deployed address, while the on-chain **TokenAdminRegistry** stays the authority for the wired
-pool - `make doctor` reports any divergence as a WARN.
+- **`config/chains/<selectorName>.json`** - pure API/chain facts. Everything the CCIP REST API serves
+  (`ccip{}` addresses + the identity/metadata fields `displayName`/`chainFamily`/`environment`/
+  `explorerUrl`/`nativeCurrencySymbol`) is API-owned, written by the sync. Three keys the API serves nothing
+  for are hand-authored in reviewed PRs (`chainNameIdentifier`, `rpcEnv`, `confirmations`), and the join keys
+  (`name`/`chainSelector`/`chainId`) are seeded once and guard-validated.
+- **`project/[<group>/]<selectorName>.json`** - the project store: three subtrees plus a top-level
+  `"schema": 3`, **one writer each**. `addresses{}` (deployed-address registry) is written by the deploy
+  recorder and `make adopt-token`; `lanes{}` (owner policy) by `make add-lane` / `make remove-lane`; `roles{}`
+  (authority) by `make snapshot-chain`. Every writer seeds the full skeleton if the file is absent, and writes
+  only its own subtree, so no writer can clobber another's. The optional `<group>` segment (`GROUP=` /
+  `PROJECT_GROUP`, unset = the flat default group) puts a second token in its own isolated directory - see
+  [`config-schema.md`](config-schema.md#the-project-store---projectselectornamejson).
+
+**Tracking differs by file, and so does the audit surface.** `config/chains` is **always git-tracked**, so a
+git diff is an unambiguous audit artifact. `project/` is **gitignored in this template repo** (it holds only
+throwaway test-deployment addresses; only `project/ethereum-testnet-sepolia.example.json` ships) - a
+downstream **fork un-gitignores `project/`** so its lanes, roles, and addresses become one reviewed,
+git-versioned source of truth (public data only, never secrets). So the audit surface is `config/chains` in
+the template, and `config/chains` **plus** a tracked `project/` in a fork. `history/` (the deploy ledger) is
+gitignored in both. See [`deployed-addresses.md`](deployed-addresses.md#tracking-rule-template-vs-fork).
+
+The `addresses{}` subtree's anti-drift integrity comes from a **single writer**: each deploy script makes ONE
+call to `script/utils/DeploymentRecorder.s.sol` per artifact, and that one call writes **both** views it
+touches - the `history/<category>/<selectorName>/**` ledger (via `DeploymentUtils.save*`, per-file format
+unchanged) **and** the registry (`deployments[name]` + `active[role]`, via `RegistryWriter`, `writeJson` on
+`.addresses` only). Because one writer owns both, the ledger and the registry cannot drift. The registry is
+the only address store read back (by `HelperConfig` resolution and the redeploy guard); the ledger is
+write-only history. `active.<role>` records the most-recently-deployed address, while the on-chain
+**TokenAdminRegistry** stays the authority for the wired pool - `make doctor` reports any divergence as a
+WARN.
+
+The diagram below is the three-view picture: `config/chains` (API-owned facts), the `project/` store (three
+subtrees, three writers), and the `history/` ledger. The blue audit-surface nodes are the git-tracked
+surface (config/chains always; project/ when a fork tracks it).
 
 ```mermaid
 %%{init: {'theme':'base','themeVariables':{'primaryColor':'#375BD2','primaryTextColor':'#FFFFFF','primaryBorderColor':'#1A2B6B','lineColor':'#375BD2','fontFamily':'Inter, system-ui, sans-serif'}}}%%
 flowchart LR
     API["CCIP REST API"] -->|sync writes| CCIP["ccip addresses<br/>+ identity/metadata<br/>(displayName, chainFamily,<br/>environment, explorerUrl,<br/>nativeCurrencySymbol)"]
-    HUMAN["Maintainer (reviewed PR)"] -->|hand edit| ID["hand keys<br/>chainNameIdentifier, rpcEnv,<br/>confirmations, ccipBnM"]
-    OWNER["Policy owner"] -->|make add-lane| LANES["lanes - remote selector<br/>+ outbound rate-limit policy"]
-    GOV["Governance"] -. deferred .-> ROLES["roles - privileged roles"]
-    CCIP --> DIFF["git diff = the audit log<br/>(config/chains/*.json only)"]
-    ID --> DIFF
-    LANES --> DIFF
+    HUMAN["Maintainer (reviewed PR)"] -->|hand edit| ID["3 hand keys<br/>chainNameIdentifier,<br/>rpcEnv, confirmations"]
+    OWNER["Policy owner"] -->|make add-lane| LANES["lanes{} - remote selector<br/>+ outbound rate-limit policy"]
+    GOV["Security owner"] -->|make snapshot-chain| ROLES["roles{} - privileged<br/>authority surface"]
+    DEPLOY["Deploy scripts"] -->|broadcast| REC["DeploymentRecorder<br/>ONE call per artifact"]
+    ADOPT["make adopt-token"] -->|RegistryWriter| ADDR
+    REC -->|save*| LEDGER["history/&lt;category&gt;/&lt;selectorName&gt;/**<br/>timestamped ledger (write-only)"]
+    REC -->|RegistryWriter, writeJson .addresses| ADDR["addresses{} (registry)<br/>active[role] + deployments[name]<br/>(read back by HelperConfig + guard)"]
+    TAR["on-chain TokenAdminRegistry<br/>(authority for the WIRED pool)"] -. make doctor: WARN on divergence .-> ADDR
 
-    subgraph GT["git-tracked config/chains/&lt;selectorName&gt;.json"]
+    subgraph CFG["config/chains/&lt;selectorName&gt;.json (ALWAYS git-tracked)"]
         CCIP
         ID
+    end
+    subgraph PRJ["project/[&lt;group&gt;/]&lt;selectorName&gt;.json - one file per (group, chain)<br/>schema 3 (gitignored here; a fork tracks it)"]
+        ADDR
         LANES
+        ROLES
     end
-
-    subgraph LOCAL["local-only, gitignored (per deploy machine)"]
-        REC["DeploymentRecorder<br/>ONE call per artifact"]
-        LEDGER["script/deployments/**<br/>timestamped ledger (write-only)"]
-        ADDR["addresses/&lt;chainId&gt;.json<br/>active[role] + deployments[name]<br/>(read back by HelperConfig + guard)"]
+    subgraph HIST["history/ (gitignored, write-only)"]
+        LEDGER
     end
-    DEPLOY["Deploy scripts"] -->|broadcast| REC
-    REC -->|save*| LEDGER
-    REC -->|RegistryWriter| ADDR
-    TAR["on-chain TokenAdminRegistry<br/>(authority for the WIRED pool)"] -. make doctor: WARN on divergence .-> ADDR
 
     classDef api fill:#375BD2,color:#FFFFFF,stroke:#1A2B6B,stroke-width:1px;
     classDef writer fill:#1A2B6B,color:#FFFFFF,stroke:#0B1636,stroke-width:1px;
     classDef subtree fill:#E8EDFB,color:#0B1636,stroke:#375BD2,stroke-width:1px;
-    classDef future fill:#FFFFFF,color:#375BD2,stroke:#375BD2,stroke-width:1px,stroke-dasharray:4 3;
-    classDef audit fill:#375BD2,color:#FFFFFF,stroke:#1A2B6B,stroke-width:2px;
+    classDef store fill:#FFFFFF,color:#0B1636,stroke:#1A2B6B,stroke-width:1px;
     class API,TAR api;
-    class HUMAN,DEPLOY,OWNER,GOV,REC writer;
-    class CCIP,ID,LANES,ADDR,LEDGER subtree;
-    class ROLES future;
-    class DIFF audit;
+    class HUMAN,DEPLOY,OWNER,GOV,REC,ADOPT writer;
+    class CCIP,ID,LANES,ROLES,ADDR subtree;
+    class LEDGER store;
 ```
 
 ### 4. Lane reciprocity & the mesh
 
-A lane is **directional policy**: `lanes.<remote>` in chain A's file declares "A's pool connects OUT to
-`<remote>`" with an outbound rate limit. A working transfer path needs the lane declared on **both** files
-(each side's `applyChainUpdates` reads its own file), so the committed configs must form a **reciprocal
-mesh**. `make add-lane ... BOTH=1` writes both sides in one command, and `make remove-lane` is its undo
+A lane is **directional policy**: `lanes.<remote>` in chain A's **project store** (`project/A.json`)
+declares "A's pool connects OUT to `<remote>`" with an outbound rate limit. A working transfer path needs
+the lane declared in **both** project files (each side's `applyChainUpdates` reads its own file), so the
+project stores must form a **reciprocal mesh**. The mesh is scoped **per group**: reciprocity is checked
+among sibling files within one group directory (`project/[<group>/]`), so a lane declared in one group never
+satisfies another group's reciprocity - see
+[`config-schema.md`](config-schema.md#the-project-store---projectselectornamejson). `make add-lane ... BOTH=1` writes both sides in one command,
+and `make remove-lane` is its undo
 (declaration only - a lane still applied on the pool must be removed separately on-chain via
 `RemoveChain` (whole-chain teardown, every version) or `RemoveRemotePool` (one pool, 1.5.1+), and
 until then the doctor's lanes rung WARNs about the undeclared on-chain
 lane); the doctor's **mesh rung** proves the property across the whole directory on every
 `make doctor CHAIN=<name>`:
 
-- **Resolution** - every `lanes.<remote>` key must resolve to an existing `config/chains/<remote>.json`
-  (a dangling lane is a FAIL), and the entry's stored `remoteSelector` must equal that file's
-  `chainSelector` (a mismatch is a FAIL - the lane was declared against a renamed or re-created chain).
+- **Resolution** - every `lanes.<remote>` key must resolve to a remote that is onboarded in the chain
+  catalog (an existing `config/chains/<remote>.json`; a dangling lane is a FAIL), and the entry's stored
+  `remoteSelector` must equal that file's `chainSelector` (a mismatch is a FAIL - the lane was declared
+  against a renamed or re-created chain).
 - **Reciprocity, both directions** - a one-sided lane is a FAIL naming both chains, whichever side you
-  doctor: A→B without B→A fails the doctor of **A** (forward check: does my remote declare me back?) and
-  of **B** (reverse scan: which other configs declare lanes to me that I do not declare back?).
+  doctor: A→B without B→A fails the doctor of **A** (forward check: does my remote's project store declare
+  me back?) and of **B** (reverse scan: which other project stores declare lanes to me that I do not declare
+  back?).
 - **Non-EVM exemption** - non-EVM chains are destination-only here and carry no `lanes{}`, so a lane
   **to** e.g. `solana-devnet` is checked for resolution but exempt from reciprocity (a SKIP, not a FAIL).
 
@@ -217,7 +242,7 @@ doctor's probe and degrades to a WARN or SKIP. Coverage: `test/config/VerifyChai
 The declaration is not just verified - it is **consumed**, by four scripts sharing one input ladder
 (matching the repo's `inline > env > registry` idiom): **env vars win** when set (byte-for-byte the
 historical behavior - the explicit override for incident response), otherwise the value comes from the
-**declared `lanes{}` entry** in the local chain config (matched by the remote's config name, falling
+**declared `lanes{}` entry** in the local project store (matched by the remote's config name, falling
 back to `remoteSelector` equality), and with neither the historical default stands.
 
 - **`ApplyChainUpdates`** (CLI mode) resolves its rate-limit buckets per direction: `capacity`/`rate`
@@ -252,9 +277,9 @@ declaration is reconciled through a reviewed edit. Coverage: `test/setup/ApplyCh
 ```mermaid
 %%{init: {'theme':'base','themeVariables':{'primaryColor':'#375BD2','primaryTextColor':'#FFFFFF','primaryBorderColor':'#1A2B6B','lineColor':'#375BD2','fontFamily':'Inter, system-ui, sans-serif'}}}%%
 flowchart LR
-    A["config/chains/A.json<br/>lanes.B: remoteSelector + capacity/rate"]
-    B["config/chains/B.json<br/>lanes.A: remoteSelector + capacity/rate"]
-    SVM["config/chains/solana-devnet.json<br/>(no lanes - destination-only)"]
+    A["project/A.json<br/>lanes.B: remoteSelector + capacity/rate"]
+    B["project/B.json<br/>lanes.A: remoteSelector + capacity/rate"]
+    SVM["solana-devnet<br/>(no lanes - destination-only)"]
     A ---|"reciprocal (doctor: PASS)"| B
     A -->|"one-way lane (doctor: SKIP reciprocity)"| SVM
     D["make doctor CHAIN=A<br/>mesh rung"] -->|"forward: B declares A back?<br/>reverse: who declares A?"| A
@@ -294,7 +319,7 @@ flowchart LR
 ## Related
 
 - **[`config-schema.md`](config-schema.md)** - the per-field reference for a chain config file.
-- **[`deployed-addresses.md`](deployed-addresses.md)** - the two deployed-address stores (the append-only
-  `script/deployments/` history vs the machine-read `addresses/<chainId>.json` registry), how one recorder
-  call emits both, the resolution ladder, and the doctor's TAR reconciliation.
+- **[`deployed-addresses.md`](deployed-addresses.md)** - the deployed-address loop (the append-only
+  `history/` ledger vs the machine-read `addresses{}` registry sub-store of `project/<selectorName>.json`),
+  how one recorder call emits both, the resolution ladder, and the doctor's TAR reconciliation.
 - [README → Configuration](../README.md#configuration) · [README → Adding a New Chain](../README.md#adding-a-new-chain).

@@ -11,7 +11,7 @@ import {DeployERC20LockBox} from "../../script/deploy/DeployERC20LockBox.s.sol";
 import {DeployLockReleaseTokenPool} from "../../script/deploy/DeployLockReleaseTokenPool.s.sol";
 import {BaseForkTest} from "../BaseForkTest.t.sol";
 
-/// @notice LockRelease + ERC20LockBox fork fixture for the PR 1.2 rollout. The fixture is built with the
+/// @notice LockRelease + ERC20LockBox fork fixture. The fixture is built with the
 /// repo's OWN deploy scripts in the README order — lockbox first, then the LockReleaseTokenPool, then the
 /// pool is authorized on the lockbox via the authorized-callers action. It proves the invariant that a
 /// lockbox deposit/withdraw succeeds ONLY after the caller is authorized, and exercises both README

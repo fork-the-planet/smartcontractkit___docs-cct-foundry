@@ -5,17 +5,15 @@ import {Test} from "forge-std/Test.sol";
 import {HelperConfig} from "../../script/HelperConfig.s.sol";
 
 /// @title HelperConfigGoldenDataTest
-/// @notice Golden-data parity for the config/chains JSON migration: the addresses, selectors, and
-/// genuinely hand-authored keys (`chainNameIdentifier`, `confirmations`, `ccipBnM`) below are pinned as
-/// LITERALS captured from HelperConfig BEFORE the hardcoded per-chain config functions were replaced by
-/// `config/chains/<name>.json` + `ChainConfig` — they must NOT change across the migration.
+/// @notice Golden-data parity for the `config/chains` JSON: the addresses, selectors, and genuinely
+/// hand-authored keys (`chainNameIdentifier`, `confirmations`) below are pinned as LITERALS captured
+/// from HelperConfig — they must NOT change.
 /// @dev The API-served identity/metadata fields (`chainName`/`displayName`, `chainFamily`, `explorerUrl`,
-/// `nativeCurrencySymbol`) are now SOURCED from the CCIP REST API by the config sync, so a few diverge
-/// from the old hand-typed pre-migration values and are pinned to the API truth (captured live
-/// 2026-07-09): 0g `chainName` "0g Galileo 1" / `explorerUrl` ".../0g.ai" / `nativeCurrencySymbol` "0G"
-/// (was the mistyped "OG"), Ink `nativeCurrencySymbol` "ETH" (Ink settles in ETH), Mantle `explorerUrl`
-/// "explorer.sepolia.mantle.xyz", and Solana `explorerUrl` the devnet explorer (was empty). These are
-/// the intended corrections of hand-typed drift — the API is the source of truth for these fields.
+/// `nativeCurrencySymbol`) are SOURCED from the CCIP REST API by the config sync and pinned to the API
+/// truth (captured live 2026-07-09): 0g `chainName` "0g Galileo 1" / `explorerUrl` ".../0g.ai" /
+/// `nativeCurrencySymbol` "0G", Ink `nativeCurrencySymbol` "ETH" (Ink settles in ETH), Mantle
+/// `explorerUrl` "explorer.sepolia.mantle.xyz", and Solana `explorerUrl` the devnet explorer. The API is
+/// the source of truth for these fields.
 /// No fork needed: `HelperConfig` reads local JSON only.
 contract HelperConfigGoldenDataTest is Test {
     HelperConfig internal helperConfig;
@@ -32,7 +30,6 @@ contract HelperConfigGoldenDataTest is Test {
         address tokenAdminRegistry,
         address registryModuleOwnerCustom,
         address link,
-        address ccipBnM,
         uint256 confirmations,
         string memory chainName,
         string memory chainNameIdentifier,
@@ -46,7 +43,6 @@ contract HelperConfigGoldenDataTest is Test {
         assertEq(c.tokenAdminRegistry, tokenAdminRegistry, "tokenAdminRegistry");
         assertEq(c.registryModuleOwnerCustom, registryModuleOwnerCustom, "registryModuleOwnerCustom");
         assertEq(c.link, link, "link");
-        assertEq(c.ccipBnM, ccipBnM, "ccipBnM");
         assertEq(c.confirmations, confirmations, "confirmations");
         assertEq(c.chainName, chainName, "chainName");
         assertEq(c.chainNameIdentifier, chainNameIdentifier, "chainNameIdentifier");
@@ -64,7 +60,6 @@ contract HelperConfigGoldenDataTest is Test {
             0x95F29FEE11c5C55d26cCcf1DB6772DE953B37B82,
             0xa3c796d480638d7476792230da1E2ADa86e031b0,
             0x779877A7B0D9E8603169DdbD7836e478b4624789,
-            0x9a97F119cFE1D5Ea77c264441C0A0aBC9B34E119,
             2,
             "Ethereum Sepolia",
             "ETHEREUM_SEPOLIA",
@@ -83,7 +78,6 @@ contract HelperConfigGoldenDataTest is Test {
             0x23a5084Fa78104F3DF11C63Ae59fcac4f6AD9DeE,
             0x0820f975ce90EE5c508657F0C58b71D1fcc85cE0,
             0xe5e3a4fF1773d043a387b16Ceb3c91cC49bAFD54,
-            0xDbB255D37BC7c9e2b08e5a1C9f9506c9E85F1644,
             2,
             "0g Galileo 1",
             "0G_GALILEO_TESTNET",
@@ -102,7 +96,6 @@ contract HelperConfigGoldenDataTest is Test {
             0x855cF0d18A0BeBEDA7c1CD2F943686120cCCC6bd,
             0x693926456C8b210f56E29Bc5b4514B32A5224c88,
             0xB97e3665AEAF96BDD6b300B2e0C93C662104A068,
-            0x225fAc4130595d1C7dabbE61A8bA9B051440b76c,
             2,
             "Plume Testnet",
             "PLUME_TESTNET",
@@ -121,7 +114,6 @@ contract HelperConfigGoldenDataTest is Test {
             0x3A849a05a590FeaEf26c2d425241A2BF29307161,
             0xaB018890bBdDf9B80E21d1c335c5f6acdbE0f5D6,
             0x3423C922911956b1Ccbc2b5d4f38216a6f4299b4,
-            0x414dbe1d58dd9BA7C84f7Fc0e4f82bc858675d37,
             2,
             "Ink Sepolia",
             "INK_SEPOLIA",
@@ -140,7 +132,6 @@ contract HelperConfigGoldenDataTest is Test {
             0x0F1eE88A582f31d92510E300fc1330AA5a525D51,
             0xf76cE612250eeEb8889F49FBCB11f1c2705305F6,
             0x22bdEdEa0beBdD7CfFC95bA53826E55afFE9DE04,
-            0xBB370F829bdB6fC44f3D34e2A2107578bB2c3F0B,
             2,
             "Mantle Sepolia",
             "MANTLE_SEPOLIA",
@@ -154,7 +145,6 @@ contract HelperConfigGoldenDataTest is Test {
         _assertConfig(
             helperConfig.getSolanaDevnetConfig(),
             16423721717087811551,
-            address(0),
             address(0),
             address(0),
             address(0),

@@ -15,7 +15,9 @@ import {Vm} from "forge-std/Vm.sol";
 ///   - `ccip{}`: the CCIP directory addresses (`router`, `rmnProxy`, `tokenAdminRegistry`,
 ///     `registryModuleOwnerCustom`, `link`, plus `feeQuoter`/`tokenPoolFactory`/`feeTokens`
 ///     kept for reference).
-///   - repo extras: `confirmations`, `explorerUrl`, `nativeCurrencySymbol`, `ccipBnM`.
+///   - repo extras: `confirmations`, `explorerUrl`, `nativeCurrencySymbol`.
+/// Project state (`lanes{}`, `roles{}`, deployed `addresses{}`) lives in `project/<selectorName>.json`,
+/// NOT here — this file is PURE API/chain facts (see `docs/config-schema.md`).
 /// `chainId` and `chainSelector` are quoted decimal STRINGS (uint64 selectors exceed JSON's safe
 /// integer range) and are read with `vm.parseJsonUint`, which parses quoted decimals. Reads use
 /// targeted key paths (`vm.parseJsonAddress(json, ".ccip.router")`) rather than whole-struct
@@ -32,7 +34,6 @@ library ChainConfig {
         address tokenAdminRegistry;
         address registryModuleOwnerCustom;
         address link;
-        address ccipBnM;
         uint256 confirmations;
         string chainName;
         string chainNameIdentifier;
@@ -50,18 +51,30 @@ library ChainConfig {
         return _parse(VM.readFile(_path(name)));
     }
 
-    /// @notice `load` + the declared chain ID, tolerating a file that no longer exists (returns
-    /// `ok = false`). One single `readFile` backs the whole record, and the read itself is
-    /// try/catch-able (cheatcode calls are external calls), so directory-scan consumers (see
-    /// `names()`) racing a parallel deletion — e.g. a test cleaning up its scratch config between
-    /// the existence check and the read — get a clean `ok = false`, never an aborted run.
+    /// @notice `load` + the declared chain ID, tolerating a file that no longer exists OR is only
+    /// half-written (returns `ok = false`). Directory-scan consumers (see `names()`) race parallel
+    /// tests that create/delete scratch configs, so BOTH the read AND the parse are guarded: a
+    /// deleted file fails `readFile`; a mid-write file (`vm.writeJson` truncates then writes, so a
+    /// concurrent reader can momentarily see partial, invalid JSON) fails the parse probe below.
+    /// Either way the caller gets a clean `ok = false`, never an aborted `HelperConfig` construction.
+    /// @dev The parse must be guarded, not just the read: `_parse` is an internal call, so its
+    /// cheatcode reverts on invalid JSON would propagate PAST a `try` that only wraps `readFile`.
+    /// `parseJsonUint(".chainId")` is the canary — it reverts on a partial document, and once it
+    /// succeeds the file is complete valid JSON, so `_parse` reads every key without reverting.
     function tryLoad(string memory name) internal view returns (bool ok, Chain memory c, uint256 declaredChainId) {
         if (!VM.exists(_path(name))) return (false, c, 0);
-        try VM.readFile(_path(name)) returns (string memory json) {
-            return (true, _parse(json), VM.parseJsonUint(json, ".chainId"));
+        string memory json;
+        try VM.readFile(_path(name)) returns (string memory data) {
+            json = data;
         } catch {
             return (false, c, 0);
         }
+        try VM.parseJsonUint(json, ".chainId") returns (uint256 id) {
+            declaredChainId = id;
+        } catch {
+            return (false, c, 0);
+        }
+        return (true, _parse(json), declaredChainId);
     }
 
     /// @dev Parses one already-read chain JSON document into a `Chain` record.
@@ -72,7 +85,6 @@ library ChainConfig {
         c.tokenAdminRegistry = VM.parseJsonAddress(json, ".ccip.tokenAdminRegistry");
         c.registryModuleOwnerCustom = VM.parseJsonAddress(json, ".ccip.registryModuleOwnerCustom");
         c.link = VM.parseJsonAddress(json, ".ccip.link");
-        c.ccipBnM = VM.parseJsonAddress(json, ".ccipBnM");
         c.confirmations = VM.parseJsonUint(json, ".confirmations");
         c.chainName = VM.parseJsonString(json, ".displayName");
         c.chainNameIdentifier = VM.parseJsonString(json, ".chainNameIdentifier");

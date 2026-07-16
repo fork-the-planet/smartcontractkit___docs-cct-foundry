@@ -21,6 +21,7 @@ contract DeployBurnMintTokenPool is Script {
         uint256 chainId = block.chainid;
         string memory chainName = helperConfig.getChainName(chainId);
         HelperConfig.NetworkConfig memory config = helperConfig.getNetworkConfig(chainId);
+        string memory selectorName = helperConfig.getSelectorName(chainId);
 
         console.log("");
         console.log("========================================");
@@ -71,7 +72,7 @@ contract DeployBurnMintTokenPool is Script {
         // unique per-symbol/per-pool-type/per-version deployment name so a BurnMint and a LockRelease
         // pool (or an old and a new version) for the same token never collide.
         string memory symbol = DeploymentUtils.getSymbol(vm, tokenAddress);
-        RegistryWriter.guard(chainId, DeploymentRecorder.poolName(symbol, "BurnMint"));
+        RegistryWriter.guard(selectorName, DeploymentRecorder.poolName(symbol, "BurnMint"));
 
         vm.startBroadcast();
 
@@ -123,7 +124,7 @@ contract DeployBurnMintTokenPool is Script {
         // Single writer: one call emits the detailed ledger file AND records the address in the
         // registry (deployments[{symbol}_BurnMintTokenPool_{version}] + active.tokenPool).
         DeploymentRecorder.recordTokenPool(
-            vm, chainId, config.chainNameIdentifier, tokenPoolAddress, tokenAddress, "BurnMint"
+            vm, selectorName, config.chainNameIdentifier, tokenPoolAddress, tokenAddress, "BurnMint"
         );
         console.log("");
         console.log("The address is registered in the address registry; later scripts resolve it automatically.");

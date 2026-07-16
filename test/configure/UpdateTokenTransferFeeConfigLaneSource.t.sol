@@ -77,15 +77,21 @@ contract UpdateTokenTransferFeeConfigLaneSourceTest is LaneReconcileScratch {
     uint256[6] internal CURRENT_VALUES = [uint256(70_000), 16, 30, 300, 15, 75];
 
     function setUp() public {
-        // Delete leftover scratch files from a prior aborted run: cleanup happens before every
-        // test, never at the end of a happy path a failing assertion would skip.
+        _clean();
+        harness = new FeeConfigLaneSourceHarness();
+    }
+
+    /// @dev Sweeps this suite's scratch fixtures from setUp(): the revert-safe guarantee (a failed
+    /// test leaves its fixtures for inspection until the next run). Each test additionally removes
+    /// ONLY the fixtures it owns at the end of its body (suite siblings run in parallel), so a green
+    /// run leaves no residue.
+    function _clean() private {
         string[] memory names = new string[](10);
         for (uint256 n = 1; n <= 9; n++) {
             names[n - 1] = string.concat("zz-scratch-feesrc-l", vm.toString(n));
         }
         names[9] = "zz-scratch-feesrc-r1";
         _cleanupScratch(names);
-        harness = new FeeConfigLaneSourceHarness();
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -189,7 +195,7 @@ contract UpdateTokenTransferFeeConfigLaneSourceTest is LaneReconcileScratch {
         assertEq(
             res.editHintText,
             string.concat(
-                unicode"⚠️  Applied fee config is not declared in lanes.zz-scratch-feesrc-r1.v2.feeConfig (config/chains/",
+                unicode"⚠️  Applied fee config is not declared in lanes.zz-scratch-feesrc-r1.v2.feeConfig (project/",
                 local,
                 ".json). Hand-edit the block to the applied values: destGasOverhead=",
                 vm.toString(ENV_VALUES[0]),
@@ -210,7 +216,7 @@ contract UpdateTokenTransferFeeConfigLaneSourceTest is LaneReconcileScratch {
             "composed undeclared edit hint"
         );
 
-        vm.removeFile(_path(local));
+        _cleanupScratchOne(local);
         vm.removeFile(_path("zz-scratch-feesrc-r1"));
     }
 
@@ -228,10 +234,10 @@ contract UpdateTokenTransferFeeConfigLaneSourceTest is LaneReconcileScratch {
         assertFalse(res.anyDiverges, "agreeing env values must not flag divergence");
         assertFalse(res.editHint, "an agreeing declaration needs no hint");
 
-        vm.removeFile(_path(local));
+        _cleanupScratchOne(local);
     }
 
-    // All six env vars + a DIVERGING declared block: env wins byte-for-byte, every field flags its
+    // All six env vars + a DIVERGING declared block: env wins, every field flags its
     // divergence, hint armed.
     function test_EnvAndBlockDiverge_EnvWins_DivergenceAndHint() public {
         string memory local = _localChain(3);
@@ -257,14 +263,14 @@ contract UpdateTokenTransferFeeConfigLaneSourceTest is LaneReconcileScratch {
                 vm.toString(ENV_VALUES[0]),
                 " diverges from declared lanes.zz-scratch-feesrc-remote3.v2.feeConfig.destGasOverhead=",
                 vm.toString(LANE_VALUES[0]),
-                " in config/chains/",
+                " in project/",
                 local,
                 ".json - make doctor will WARN until reconciled"
             ),
             "composed per-field divergence notice"
         );
 
-        vm.removeFile(_path(local));
+        _cleanupScratchOne(local);
     }
 
     // PER-FIELD divergence: one env var set to a diverging value, the block declares all six —
@@ -286,7 +292,7 @@ contract UpdateTokenTransferFeeConfigLaneSourceTest is LaneReconcileScratch {
         }
         assertTrue(res.editHint, "the diverging field must hint");
 
-        vm.removeFile(_path(local));
+        _cleanupScratchOne(local);
     }
 
     // Partial env AGREEING with its declared field: env wins for the set field (no divergence),
@@ -304,7 +310,7 @@ contract UpdateTokenTransferFeeConfigLaneSourceTest is LaneReconcileScratch {
         assertFalse(res.anyDiverges, "agreeing override must not diverge");
         assertFalse(res.editHint, "nothing diverges, no hint");
 
-        vm.removeFile(_path(local));
+        _cleanupScratchOne(local);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -326,7 +332,7 @@ contract UpdateTokenTransferFeeConfigLaneSourceTest is LaneReconcileScratch {
         assertTrue(res.anyFromLanes, "lanes rung must aggregate");
         assertFalse(res.editHint, "a lanes{}-sourced apply is already consistent");
 
-        vm.removeFile(_path(local));
+        _cleanupScratchOne(local);
     }
 
     // No env, PARTIAL declared block (first three fields): declared fields from the block, the
@@ -349,15 +355,15 @@ contract UpdateTokenTransferFeeConfigLaneSourceTest is LaneReconcileScratch {
         }
         assertFalse(res.editHint, "no env override, no hint");
 
-        vm.removeFile(_path(local));
+        _cleanupScratchOne(local);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
     // Rung 3: neither env vars nor a declared block
     // ─────────────────────────────────────────────────────────────────────────
 
-    // The historical default stands byte-for-byte: every field keeps the current on-chain value
-    // (zero when no config is stored yet) and nothing hints — the exact pre-existing
+    // The default stands: every field keeps the current on-chain value
+    // (zero when no config is stored yet) and nothing hints — the
     // `vm.envOr(name, current)` semantics.
     function test_NoEnv_NoBlock_CurrentOnChainDefaults_NoHint() public {
         string memory local = _localChain(8);
@@ -372,7 +378,7 @@ contract UpdateTokenTransferFeeConfigLaneSourceTest is LaneReconcileScratch {
         assertFalse(res.anyFromLanes, "nothing lanes-sourced");
         assertFalse(res.editHint, "historical default needs no hint");
 
-        vm.removeFile(_path(local));
+        _cleanupScratchOne(local);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -393,7 +399,7 @@ contract UpdateTokenTransferFeeConfigLaneSourceTest is LaneReconcileScratch {
         assertEq(res.laneKey, "zz-scratch-feesrc-ghost9", "wrong lane key matched");
         _assertValues(res, LANE_VALUES, "declared value drives");
 
-        vm.removeFile(_path(local));
+        _cleanupScratchOne(local);
     }
 
     // ─────────────────────────────────────────────────────────────────────────

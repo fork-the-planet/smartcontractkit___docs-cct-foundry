@@ -12,7 +12,6 @@
     "tokenAdminRegistry": "0x0F1eE88A582f31d92510E300fc1330AA5a525D51",
     "tokenPoolFactory": "0x9fCd83bC7F67ADa1fB51a4caBEa333c72B641bd1"
   },
-  "ccipBnM": "0xBB370F829bdB6fC44f3D34e2A2107578bB2c3F0B",
   "chainFamily": "evm",
   "chainId": "5003",
   "chainNameIdentifier": "MANTLE_SEPOLIA",
@@ -21,7 +20,6 @@
   "displayName": "Mantle Sepolia",
   "environment": "testnet",
   "explorerUrl": "https://explorer.sepolia.mantle.xyz",
-  "lanes": {},
   "name": "ethereum-testnet-sepolia-mantle-1",
   "nativeCurrencySymbol": "MNT",
   "rpcEnv": "MANTLE_SEPOLIA_RPC_URL"

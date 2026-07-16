@@ -14,8 +14,8 @@ import {BaseForkTest} from "../BaseForkTest.t.sol";
 /// @dev A minimal pool that exposes ONLY the v1.x rate-limiter surface (`setChainRateLimiterConfig` +
 ///      the two per-direction getters) and NOT the v2 `getCurrentRateLimiterState(uint64,bool)` getter.
 ///      It faithfully stores the config the v1 setter writes, so the v1 dispatch path can be
-///      fork-executed and read back — the 1.6.x generation is no longer in this repo's dependency set,
-///      so a minimal faithful v1 ABI is the honest way to prove the dual-generation dispatch still
+///      fork-executed and read back — the 1.6.x generation is not in this repo's dependency set,
+///      so a minimal faithful v1 ABI is the honest way to prove the dual-generation dispatch
 ///      routes correctly.
 contract MockV1RateLimiterPool {
     address public owner;
@@ -71,9 +71,9 @@ contract FastFinalityProbePool is BurnMintTokenPool {
     }
 }
 
-/// @notice Fork parity tests for the PR 1.2 action-layer rollout of the `configure/*` write-script groups.
-/// Each refactored operation is exercised through its `CctActions` builder (the exact `Call[]` the scripts
-/// now hand to `EoaExecutor`), then asserted against the pool's on-chain getters.
+/// @notice Fork parity tests for the `configure/*` write-script groups.
+/// Each operation is exercised through its `CctActions` builder (the exact `Call[]` the scripts
+/// hand to `EoaExecutor`), then asserted against the pool's on-chain getters.
 contract ConfigureActionsForkTest is BaseForkTest {
     uint64 internal constant SELECTOR = 8236463271206331221; // Mantle Sepolia
     address internal constant REMOTE_POOL = address(0x1111111111111111111111111111111111111111);

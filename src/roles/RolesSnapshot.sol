@@ -6,9 +6,10 @@ import {console} from "forge-std/console.sol";
 
 import {RolesProbes} from "./RolesProbes.sol";
 import {RegistryWriter} from "../utils/RegistryWriter.sol";
+import {ProjectStore} from "../utils/ProjectStore.sol";
 
 /// @title RolesSnapshot
-/// @notice Builds the `roles{}` subtree of `config/chains/<name>.json` FROM the live chain (the active
+/// @notice Builds the `roles{}` subtree of `project/<selectorName>.json` FROM the live chain (the active
 /// fork must be the chain itself) — the bootstrap half of the authority durable store: `make
 /// snapshot-chain` backfills declared state from chain, `make roles-check` reconciles it forever after.
 /// Preserve-and-replace: chain-readable values are re-read live; pure DECLARATIONS that cannot be
@@ -44,43 +45,61 @@ contract RolesSnapshot {
         RolesProbes.TokenTemplate template;
     }
 
-    /// @notice Build the `roles{}` JSON for `name` from the ACTIVE fork. `json` is the chain's full
-    /// config file content (used for address resolution + preserved declarations).
-    function build(string memory name, string memory json) external returns (string memory) {
+    /// @notice Build the `roles{}` JSON for `name` (the selectorName) from the ACTIVE fork.
+    /// `configJson` is `config/chains/<name>.json` (pure API/chain facts — the `.ccip.tokenAdminRegistry`
+    /// directory fallback); `projectJson` is `project/<name>.json` (the existing `.roles{}` block —
+    /// self-embedded token/pool anchors + preserved declarations). The two writer-domains stay separate.
+    function build(string memory name, string memory configJson, string memory projectJson)
+        external
+        returns (string memory)
+    {
         Ctx memory c;
         c.name = name;
-        (c.token, c.pool) = _resolveProject(json);
-        c.tar = _resolveTar(json);
+        (c.token, c.pool) = _resolveProject(name, projectJson);
+        address ccipTar = VM.keyExistsJson(configJson, ".ccip.tokenAdminRegistry")
+            ? VM.parseJsonAddress(configJson, ".ccip.tokenAdminRegistry")
+            : address(0);
+        c.tar = _resolveTar(projectJson, ccipTar);
         c.template = RolesProbes.detectTemplate(c.token);
         (c.isV2,, c.rateLimitAdmin, c.feeAdmin) = RolesProbes.readPoolAdmins(c.pool);
         (, c.poolOwner) = RolesProbes.tryAddress(c.pool, "owner()");
         (c.tarAdmin,) = _tarConfig(c.tar, c.token);
-        return _assemble(c, json);
+        return _assemble(c, projectJson);
     }
 
     /// @dev Token/pool resolution — the declared `roles{}` wins (it IS the durable record; the
-    /// `addresses/<chainId>.json` registry is gitignored and single-valued per role), then the
-    /// `TOKEN`/`TOKEN_POOL` env overrides, then the registry's active pointers.
-    function _resolveProject(string memory json) private view returns (address token, address pool) {
+    /// `project/<selectorName>.json` `addresses{}` store is single-valued per role and, in this repo,
+    /// gitignored), then the `TOKEN`/`TOKEN_POOL` env overrides, then the store's active pointers.
+    function _resolveProject(string memory name, string memory json)
+        private
+        view
+        returns (address token, address pool)
+    {
         if (VM.keyExistsJson(json, ".roles.token.address")) {
             token = VM.parseJsonAddress(json, ".roles.token.address");
         }
         if (token == address(0)) token = VM.envOr("TOKEN", address(0));
-        if (token == address(0)) token = RegistryWriter.read(block.chainid, "token");
+        if (token == address(0)) token = RegistryWriter.read(name, "token");
         require(
             token != address(0),
-            "[snapshot] no token to snapshot: declare roles.token.address, set TOKEN=<addr>, or deploy first "
-            "(addresses/<chainId>.json active.token)"
+            string.concat(
+                "[snapshot] no token to snapshot: declare roles.token.address, set TOKEN=<addr>, or deploy first (",
+                ProjectStore.display(name),
+                " addresses.active.token)"
+            )
         );
         if (VM.keyExistsJson(json, ".roles.pool.address")) {
             pool = VM.parseJsonAddress(json, ".roles.pool.address");
         }
         if (pool == address(0)) pool = VM.envOr("TOKEN_POOL", address(0));
-        if (pool == address(0)) pool = RegistryWriter.read(block.chainid, "tokenPool");
+        if (pool == address(0)) pool = RegistryWriter.read(name, "tokenPool");
         require(
             pool != address(0),
-            "[snapshot] no pool to snapshot: declare roles.pool.address, set TOKEN_POOL=<addr>, or deploy first "
-            "(addresses/<chainId>.json active.tokenPool)"
+            string.concat(
+                "[snapshot] no pool to snapshot: declare roles.pool.address, set TOKEN_POOL=<addr>, or deploy first (",
+                ProjectStore.display(name),
+                " addresses.active.tokenPool)"
+            )
         );
     }
 
@@ -388,13 +407,13 @@ contract RolesSnapshot {
     /// `.roles.tokenAdminRegistry.registry` > `TAR` env > `.ccip.tokenAdminRegistry`.
     /// The TAR CONTRACT's own `owner()` (the registry-module authority) is the network operator's,
     /// deliberately out of scope — neither snapshotted nor reconciled.
-    function _resolveTar(string memory json) private view returns (address) {
-        if (VM.keyExistsJson(json, ".roles.tokenAdminRegistry.registry")) {
-            return VM.parseJsonAddress(json, ".roles.tokenAdminRegistry.registry");
+    function _resolveTar(string memory projectJson, address ccipTar) private view returns (address) {
+        if (VM.keyExistsJson(projectJson, ".roles.tokenAdminRegistry.registry")) {
+            return VM.parseJsonAddress(projectJson, ".roles.tokenAdminRegistry.registry");
         }
         address env = VM.envOr("TAR", address(0));
         if (env != address(0)) return env;
-        return VM.parseJsonAddress(json, ".ccip.tokenAdminRegistry");
+        return ccipTar; // the directory TAR from config/chains/<name>.json .ccip.tokenAdminRegistry
     }
 
     function _tarConfig(address tar, address token) private view returns (address admin, address pending) {

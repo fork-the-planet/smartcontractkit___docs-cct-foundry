@@ -6,6 +6,7 @@ import {RateLimiter} from "@chainlink/contracts-ccip/contracts/libraries/RateLim
 import {AdoptToken} from "../../script/config/AdoptToken.s.sol";
 import {PoolVersion} from "../../script/utils/PoolVersion.s.sol";
 import {RegistryWriter} from "../../src/utils/RegistryWriter.sol";
+import {ProjectScratch} from "../utils/ProjectScratch.sol";
 
 /// @dev A minimal adoptable pool: configurable typeAndVersion and a getToken pointing at a real token.
 contract MockAdoptablePool {
@@ -61,7 +62,10 @@ contract AdoptTokenForkTest is Test {
     address internal constant POOL_150 = 0x12308B9b64CA40BD8d15daB6679876123Afda026; // BurnMintTokenPool 1.5.0
     address internal constant DEV_STAMPED_POOL = 0xCb8eF49c81aCf4E3100B164516f5051694cD5e31; // LockReleaseTokenPool 1.6.x-dev
 
-    uint256 internal constant SYNTHETIC_CHAIN_ID = 91_500_042;
+    // A throwaway EVM scratch selectorName for the registry-write proof (zz-scratch-*, gitignored). Its
+    // matching config/chains/<scratch>.json (chainFamily evm) is seeded in setUp so family-validation
+    // resolves; both are cleaned revert-safe in setUp.
+    string internal constant SCRATCH_SEL = "zz-scratch-adopttoken-record";
 
     AdoptToken internal script;
     string internal sepoliaJson;
@@ -75,10 +79,16 @@ contract AdoptTokenForkTest is Test {
         }
         script = new AdoptToken();
         sepoliaJson = vm.readFile("config/chains/ethereum-testnet-sepolia.json");
+        _clean();
+    }
 
-        // Registry hygiene: the synthetic chain file must not exist when a test starts.
-        string memory path = string.concat(vm.projectRoot(), "/addresses/", vm.toString(SYNTHETIC_CHAIN_ID), ".json");
-        if (vm.exists(path)) vm.removeFile(path);
+    /// @dev Registry hygiene: the scratch project file must not exist when a test starts. No scratch
+    /// chain-config is needed — RegistryWriter's family validation defaults to EVM when
+    /// config/chains/<name>.json is absent, and creating a stub config would pollute the global
+    /// HelperConfig discovery scan run by every parallel fork suite. The setUp() call is the
+    /// revert-safe guarantee; the end-of-test call keeps a green run residue-free.
+    function _clean() private {
+        ProjectScratch.clean(SCRATCH_SEL);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -210,24 +220,21 @@ contract AdoptTokenForkTest is Test {
 
     function test_Record_WritesBothStores() public {
         AdoptToken.AdoptPlan memory plan = script.validateAdoption(sepoliaJson, block.chainid, CCT_TOKEN, CCT_POOL_200);
-        plan.chainId = SYNTHETIC_CHAIN_ID;
+        plan.selectorName = SCRATCH_SEL;
 
         script.recordAdoption(plan);
 
+        assertEq(RegistryWriter.read(SCRATCH_SEL, "token"), CCT_TOKEN, "active.token must resolve the adopted token");
         assertEq(
-            RegistryWriter.read(SYNTHETIC_CHAIN_ID, "token"), CCT_TOKEN, "active.token must resolve the adopted token"
-        );
-        assertEq(
-            RegistryWriter.read(SYNTHETIC_CHAIN_ID, "tokenPool"),
+            RegistryWriter.read(SCRATCH_SEL, "tokenPool"),
             CCT_POOL_200,
             "active.tokenPool must resolve the adopted pool"
         );
         assertEq(
-            RegistryWriter.readDeployment(
-                SYNTHETIC_CHAIN_ID, string.concat(plan.tokenSymbol, "_BurnMintTokenPool_2.0.0")
-            ),
+            RegistryWriter.readDeployment(SCRATCH_SEL, string.concat(plan.tokenSymbol, "_BurnMintTokenPool_2.0.0")),
             CCT_POOL_200,
             "deployments entry keyed by the on-chain type and version"
         );
+        _clean();
     }
 }
