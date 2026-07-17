@@ -57,6 +57,13 @@ interface IHooksCCVReader {
     function getThresholdAmount() external view returns (uint256);
 }
 
+/// @dev The `typeAndVersion()` string surface. Used to confirm a hand-maintained plane's FeeQuoter
+/// is the intended CCIP version: the FeeQuoter/OnRamp/OffRamp carry the discriminating version
+/// string, whereas the Router reports the same string across versions, so it is never the version probe.
+interface ITypeAndVersionReader {
+    function typeAndVersion() external view returns (string memory);
+}
+
 /// @dev External try/catch targets for `VerifyChain` (forge forbids `this.` self-calls in ephemeral
 /// script contracts). Deployed by the script, so it inherits cheatcode access; reverts from the real
 /// `ChainConfig` parse paths / fork cheatcodes become catchable, attributed FAILs.
@@ -197,6 +204,13 @@ contract ChainProbe {
     /// of aborting the doctor run.
     function parseDeclaredFinality(string memory json) external view returns (bytes4) {
         return FinalityConfigUtils.parseDeclared(json, ".poolPolicy.finality");
+    }
+
+    /// @dev The FeeQuoter's `typeAndVersion` string, external so a wrong address / RPC hiccup degrades
+    /// to a catchable WARN. Probes the FeeQuoter (a version discriminator), never the Router.
+    function feeQuoterTypeAndVersion(address feeQuoter) external view returns (string memory) {
+        return ITypeAndVersionReader(feeQuoter).typeAndVersion();
+    }
     }
 }
 
@@ -353,8 +367,8 @@ contract VerifyChain is Script {
             bool rpcOk = _checkRpc(json);
             if (rpcOk) _checkOnChainCode(name, json);
             _checkRegistryAndExtras(name, json);
-            _checkMesh(name, projectJson);
-            _checkLanesOnChain(name, projectJson);
+            _checkMesh(name, json, projectJson);
+            _checkLanesOnChain(name, json, projectJson);
             _checkRoles(name, projectJson, rpcOk);
         } else {
             // Non-EVM chains have no EVM-shaped ccip{} to sync, so the API/RPC/on-chain/registry
@@ -427,6 +441,17 @@ contract VerifyChain is Script {
         }
         if (missing == 0) _pass("schema: all keys consumed by ChainConfig.load + the sync tooling present");
 
+        // configSource is an OPTIONAL key (absent = "api", the API-synced default). When present it
+        // must name a known plane so a typo can never silently disable the API drift check below.
+        if (vm.keyExistsJson(json, ".configSource")) {
+            string memory cs = vm.parseJsonString(json, ".configSource");
+            if (keccak256(bytes(cs)) == keccak256(bytes("api")) || keccak256(bytes(cs)) == keccak256(bytes("manual"))) {
+                _pass(string.concat("schema: configSource '", cs, "' is a known address plane"));
+            } else {
+                _fail(string.concat("schema: configSource '", cs, "' is not a known plane - use \"api\" or \"manual\""));
+            }
+        }
+
         try probe.parseChain(name) {
             _pass("schema: ChainConfig.load parses (the real read path)");
         } catch Error(string memory reason) {
@@ -438,6 +463,22 @@ contract VerifyChain is Script {
 
     // ---------------------------------------------------------------- 3. API
     function _checkApi(string memory name, string memory json) private {
+        // A manual-plane chain declares that a reviewed hand edit owns its ccip{} addresses, so the
+        // API is not the writer to drift-check against: SKIP the drift check and WARN about the one
+        // residual risk (an address change to this plane is not detectable from the API).
+        if (ChainConfig.isManual(json)) {
+            _skip(
+                string.concat(
+                    "api: configSource=manual for ",
+                    name,
+                    " - the API does not serve this address plane; git is the audit trail"
+                )
+            );
+            _warn(
+                "api: manual plane - an address change is not API-detectable; on a failure re-verify the ccip{} addresses against your address source"
+            );
+            return;
+        }
         uint64 selector = uint64(vm.parseJsonUint(json, ".chainSelector"));
         string memory flat;
         try probe.fetchFlat(selector) returns (string memory f) {
@@ -603,6 +644,29 @@ contract VerifyChain is Script {
         }
         if (bad == 0) {
             _pass("on-chain: router/rmnProxy/tokenAdminRegistry/registryModuleOwnerCustom/link all have code");
+        }
+        // On a hand-maintained plane the API drift check does not run, so log the FeeQuoter's
+        // typeAndVersion as a quick check that the ccip{} addresses are the intended CCIP version.
+        // Guard the read so a config missing .ccip.feeQuoter degrades to a WARN, never a raw abort.
+        if (ChainConfig.isManual(json)) {
+            if (!vm.keyExistsJson(json, ".ccip.feeQuoter")) {
+                _warn(
+                    string.concat(
+                        "on-chain: ", name, " is manual but has no .ccip.feeQuoter - cannot check the plane version"
+                    )
+                );
+            } else {
+                address feeQuoter = vm.parseJsonAddress(json, ".ccip.feeQuoter");
+                try probe.feeQuoterTypeAndVersion(feeQuoter) returns (string memory tv) {
+                    _pass(string.concat("on-chain: feeQuoter ", vm.toString(feeQuoter), " typeAndVersion = ", tv));
+                } catch {
+                    _warn(
+                        string.concat(
+                            "on-chain: feeQuoter ", vm.toString(feeQuoter), " did not answer typeAndVersion on ", name
+                        )
+                    );
+                }
+            }
         }
     }
 
@@ -782,7 +846,7 @@ contract VerifyChain is Script {
     /// a lane to this chain must be declared back here (so doctoring EITHER side of a one-sided lane
     /// catches it). Non-EVM remotes are exempt from reciprocity: they are destination-only in this
     /// repo and carry no lanes{} to reciprocate with.
-    function _checkMesh(string memory name, string memory projectJson) private {
+    function _checkMesh(string memory name, string memory json, string memory projectJson) private {
         string[] memory mine =
             vm.keyExistsJson(projectJson, ".lanes") ? vm.parseJsonKeys(projectJson, ".lanes") : new string[](0);
         if (mine.length == 0) {
@@ -794,9 +858,12 @@ contract VerifyChain is Script {
                 )
             );
         }
+        // This chain's own address plane (from the config the caller already read), so each lane can be
+        // checked for a cross-plane peer.
+        bool localManual = ChainConfig.isManual(json);
         uint256 failsBefore = fails;
         for (uint256 i = 0; i < mine.length; i++) {
-            _checkOwnLane(name, projectJson, mine[i]);
+            _checkOwnLane(name, projectJson, mine[i], localManual);
         }
         if (mine.length > 0 && fails == failsBefore) {
             _pass(
@@ -813,7 +880,9 @@ contract VerifyChain is Script {
     /// @dev One declared lane: the remote's config file exists (chain facts), the stored remoteSelector
     /// matches the remote's chainSelector, and the remote's PROJECT store declares the lane back. Chain
     /// facts come from `config/chains/<remote>.json`; the reciprocal lane from `project/<remote>.json`.
-    function _checkOwnLane(string memory name, string memory projectJson, string memory remote) private {
+    function _checkOwnLane(string memory name, string memory projectJson, string memory remote, bool localManual)
+        private
+    {
         string memory rPath = _path(remote);
         if (!vm.exists(rPath)) {
             _fail(string.concat("mesh: lanes.", remote, " has no config/chains/", remote, ".json (dangling lane)"));
@@ -839,6 +908,24 @@ contract VerifyChain is Script {
                     "'s chainSelector ",
                     actual,
                     " - remove the entry and re-add it: make add-lane"
+                )
+            );
+            return;
+        }
+        // Cross-plane lane: both endpoints must share an address plane (both API-sourced or both
+        // hand-maintained). Doctoring either endpoint catches it, since each checks its own lanes.
+        if (localManual != ChainConfig.isManual(rcfg)) {
+            _fail(
+                string.concat(
+                    "mesh: cross-plane lane ",
+                    name,
+                    " (configSource=",
+                    localManual ? "manual" : "api",
+                    ") -> ",
+                    remote,
+                    " (configSource=",
+                    ChainConfig.isManual(rcfg) ? "manual" : "api",
+                    ") - a lane must connect two chains on the same address plane"
                 )
             );
             return;
@@ -1002,7 +1089,7 @@ contract VerifyChain is Script {
     /// lane must increment `fails`) without the ffi/API doctor rungs. Not used by any production path.
     function checkMeshForTest(string memory name) public returns (uint256 failsOut, uint256 warnsOut) {
         probe = new ChainProbe();
-        _checkMesh(name, _readProject(name));
+        _checkMesh(name, probe.readFileFor(_path(name)), _readProject(name));
         return (fails, warns);
     }
 
@@ -1026,6 +1113,16 @@ contract VerifyChain is Script {
         probe = new ChainProbe();
         isEvm = _checkSchema(name, vm.readFile(string.concat("config/chains/", name, ".json")));
         return (isEvm, fails, warns);
+    }
+
+    /// @notice Test hook: runs ONLY the API rung (`_checkApi`) against `name`'s config, returning
+    /// `(fails, warns)`. For a manual-plane chain (`configSource: "manual"`) the rung returns before
+    /// any API fetch, so a UNIT test (no fork, no ffi/API) can assert the SKIP + WARN branch. Reads the
+    /// CONFIG file (chain facts). Not used by any production path.
+    function checkApiForTest(string memory name) public returns (uint256 failsOut, uint256 warnsOut) {
+        probe = new ChainProbe();
+        _checkApi(name, vm.readFile(string.concat("config/chains/", name, ".json")));
+        return (fails, warns);
     }
 
     /// @notice Test hook: runs ONLY the roles anchor-drift check (`_warnAnchorDrift` for the `token` and
@@ -1137,7 +1234,7 @@ contract VerifyChain is Script {
         );
     }
 
-    function _checkLanesOnChain(string memory name, string memory projectJson) private {
+    function _checkLanesOnChain(string memory name, string memory configJson, string memory projectJson) private {
         if (!forked) {
             _skip("lanes: on-chain reconciliation needs an RPC (no fork) - declared lanes not checked against the pool");
             return;

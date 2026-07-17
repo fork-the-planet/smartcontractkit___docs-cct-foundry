@@ -51,6 +51,15 @@ CLEANX_PROJECT="project/zz-scratch-cleanx.json"
 CLEANX_CONFIG="config/chains/zz-scratch-cleanx.json"
 CLEANX_GRPDIR="project/zz-scratch-cleanx-grp"
 CLEANX_HISTDIR="history/tokens/zz-scratch-cleanx"
+# Manual config plane (configSource: "manual") fixtures (section 31): a hand-maintained chain and an
+# API-sourced chain, both gitignored zz-scratch configs; in cleanup()'s rm-list.
+MANUAL_CHAIN="zz-scratch-manual-plane"
+MANUAL_FILE="config/chains/${MANUAL_CHAIN}.json"
+MANUAL_PROJECT="project/${MANUAL_CHAIN}.json"
+XPLANE_API_CHAIN="zz-scratch-manual-xapi"
+XPLANE_API_FILE="config/chains/${XPLANE_API_CHAIN}.json"
+TYPO_CHAIN="zz-scratch-manual-typo"
+TYPO_FILE="config/chains/${TYPO_CHAIN}.json"
 pass=0
 fail=0
 declare -a failures=()
@@ -74,6 +83,8 @@ cleanup() {
     restore_env
     rm -f "$TMP_FILE" "$TMP_FILE_B" "$FUJI_FILE" "$PROJECT_FILE" "$PROJECT_FILE_B" "$SVM_FILE"
     rm -f "$CLEANX_PROJECT" "$CLEANX_CONFIG"
+    rm -f "$MANUAL_FILE" "$MANUAL_PROJECT" "$XPLANE_API_FILE" "project/$XPLANE_API_CHAIN.json"
+    rm -f "$TYPO_FILE" "project/$TYPO_CHAIN.json"
     rm -rf "$CLEANX_GRPDIR" "$CLEANX_HISTDIR"
     # Glob both scratch group-dir classes so a mid-test revert never strands one (invisible to git status).
     rm -rf project/zz-scratch-*/ project/zz-tt-*/ "project/$GRP_X" "project/$GRP_Y" "project/$SVM_CHAIN.json"
@@ -745,6 +756,86 @@ else
     echo "$out" | tail -8 | sed 's/^/       | /'
 fi
 rm -f "$TMP_FILE" "$TMP_FILE_B"
+
+# ---------------------------------------------------------------- manual config plane
+
+# A hand-maintained ccip{} block the API does not serve. Seed a manual chain, an API chain, and a chain
+# with a typo'd (unknown) marker; all are full sepolia copies with distinct selectors. Canonicalize them
+# so the Makefile's post-sync jq step is a no-op (the byte-identical asserts below).
+python3 -c "
+import json
+d = json.load(open('config/chains/ethereum-testnet-sepolia.json'))
+def seed(name, cid, sel, cs):
+    d2 = dict(d)
+    d2['name'] = name; d2['chainId'] = cid; d2['chainSelector'] = sel
+    d2['chainNameIdentifier'] = name.upper().replace('-','_')
+    d2['rpcEnv'] = d2['chainNameIdentifier'] + '_RPC_URL'
+    if cs: d2['configSource'] = cs
+    json.dump(d2, open('config/chains/%s.json' % name,'w'), indent=2, sort_keys=True)
+seed('$MANUAL_CHAIN','991001','9910010000000000001','manual')
+seed('$XPLANE_API_CHAIN','991002','9910020000000000002',None)
+seed('$TYPO_CHAIN','991003','9910030000000000003','Manual')
+"
+for f in "$MANUAL_FILE" "$XPLANE_API_FILE" "$TYPO_FILE"; do jq --indent 2 -S . "$f" > "$f.canon" && mv "$f.canon" "$f"; done
+
+# The critical no-overwrite gate: make sync on a manual chain SKIPs by name (exit 0) and leaves the
+# config byte-identical, so the API sync never overwrites a hand-maintained address plane. The assert
+# block shares its action's partition (a skipped action would make before==after vacuous).
+if offline_enabled; then
+    before="$(shasum "$MANUAL_FILE")"
+    run_case "sync SKIPs a manual chain by name (never overwrites the plane)" zero "configSource is manual" -- \
+        make sync CHAIN="$MANUAL_CHAIN"
+    after="$(shasum "$MANUAL_FILE")"
+    if [ "$before" = "$after" ]; then
+        pass=$((pass + 1))
+        echo "[PASS] make sync left the manual chain's config byte-identical (addresses not overwritten)"
+    else
+        fail=$((fail + 1))
+        failures+=("manual chain byte-identical")
+        echo "[FAIL] make sync MUTATED the manual chain's config"
+    fi
+fi
+
+# Fail-closed: a typo'd (unknown) configSource must make the sync REFUSE rather than fall back to api and
+# overwrite the addresses. make sync errors by name and leaves the config byte-identical.
+if offline_enabled; then
+    before="$(shasum "$TYPO_FILE")"
+    run_case "sync refuses an unknown configSource instead of overwriting" nonzero "unknown configSource" -- \
+        make sync CHAIN="$TYPO_CHAIN"
+    after="$(shasum "$TYPO_FILE")"
+    if [ "$before" = "$after" ]; then
+        pass=$((pass + 1))
+        echo "[PASS] make sync left the typo-marker config byte-identical (fail-closed, not overwritten)"
+    else
+        fail=$((fail + 1))
+        failures+=("typo configSource byte-identical")
+        echo "[FAIL] make sync MUTATED a config with an unknown configSource"
+    fi
+fi
+
+# sync-check treats a manual chain as SKIP (no API call, the drift check does not apply), so the CI
+# drift sweep stays green and honest with a manual plane present (exit 0, no DRIFT).
+run_case "sync-check treats a manual chain as SKIP (CI drift sweep stays green)" zero "configSource is manual" -- \
+    make sync-check CHAIN="$MANUAL_CHAIN"
+
+# A manual chain's zz-scratch config is gitignored, so a manual plane fixture is never tracked residue
+# even while present; the no-residue inventory sweep stays clean with it in the tree.
+if git check-ignore -q "$MANUAL_FILE"; then
+    pass=$((pass + 1))
+    echo "[PASS] a manual chain's zz-scratch config is gitignored (no tracked residue while present)"
+else
+    fail=$((fail + 1))
+    failures+=("manual chain gitignored")
+    echo "[FAIL] the manual chain config is NOT gitignored (would be tracked residue)"
+fi
+
+# add-lane REFUSES a cross-plane lane (API chain to manual chain) by name, stating both planes; a lane
+# must connect two chains on the same address plane (no write happens, the guard fires first).
+run_case "add-lane refuses a cross-plane lane naming both chains and planes" nonzero \
+    "cross-plane lane refused: $XPLANE_API_CHAIN (configSource=api) and $MANUAL_CHAIN (configSource=manual)" -- \
+    make add-lane LOCAL="$XPLANE_API_CHAIN" REMOTE="$MANUAL_CHAIN" CAPACITY=1 RATE=1
+
+rm -f "$MANUAL_FILE" "$MANUAL_PROJECT" "$XPLANE_API_FILE" "project/$XPLANE_API_CHAIN.json" "$TYPO_FILE" "project/$TYPO_CHAIN.json"
 
 # ---------------------------------------------------------------- remove-lane
 

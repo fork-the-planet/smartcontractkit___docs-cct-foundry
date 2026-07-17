@@ -98,6 +98,29 @@ library ChainConfig {
         return VM.parseJsonUint(VM.readFile(_path(name)), ".chainId");
     }
 
+    /// @notice The declared writer of this chain's `ccip{}` subtree, read from an already-loaded
+    /// config document: `"api"` (the CCIP REST API sync owns the addresses) or `"manual"` (a reviewed
+    /// hand edit owns them, for an address plane the API does not serve). The `configSource` key is
+    /// optional; an absent key reads as `"api"`.
+    function configSource(string memory json) internal view returns (string memory) {
+        if (!VM.keyExistsJson(json, ".configSource")) return "api";
+        return VM.parseJsonString(json, ".configSource");
+    }
+
+    /// @notice True when this chain's `ccip{}` addresses are hand-maintained (`configSource: "manual"`),
+    /// meaning the API sync must not write them and the doctor's API drift check does not apply.
+    function isManual(string memory json) internal view returns (bool) {
+        return keccak256(bytes(configSource(json))) == keccak256(bytes("manual"));
+    }
+
+    /// @notice True when `configSource` is one of the two known planes (`"api"` or `"manual"`), which
+    /// includes an absent key (it reads as `"api"`). A present-but-unrecognized value is NOT known: the
+    /// sync must refuse it rather than fall back to `"api"` and overwrite a plane the operator marked.
+    function isKnownConfigSource(string memory json) internal view returns (bool) {
+        bytes32 h = keccak256(bytes(configSource(json)));
+        return h == keccak256(bytes("api")) || h == keccak256(bytes("manual"));
+    }
+
     /// @notice Enumerates every configured chain by scanning `config/chains/*.json` — the config
     /// name of each entry (file basename without `.json`, e.g. "ethereum-testnet-sepolia") feeds `load`.
     /// Directory contents ARE the chain list: dropping a new JSON file in makes the chain

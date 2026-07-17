@@ -118,7 +118,11 @@ Project state lives in two files per chain, both keyed by the canonical **select
   (`ccip{}` addresses + the identity/metadata fields `displayName`/`chainFamily`/`environment`/
   `explorerUrl`/`nativeCurrencySymbol`) is API-owned, written by the sync. Three keys the API serves nothing
   for are hand-authored in reviewed PRs (`chainNameIdentifier`, `rpcEnv`, `confirmations`), and the join keys
-  (`name`/`chainSelector`/`chainId`) are seeded once and guard-validated.
+  (`name`/`chainSelector`/`chainId`) are seeded once and guard-validated. One optional key overrides the
+  `ccip{}` writer: `"configSource": "manual"` (absent = `"api"`) declares that a reviewed hand edit, not the
+  API sync, owns the `ccip{}` addresses for an address plane the API does not serve - the sync then REFUSES
+  the chain, `sync-check` and the doctor's API rung SKIP, and a cross-plane lane is refused (see
+  [`config-schema.md`](config-schema.md#manual-address-planes-configsource-manual)).
 - **`project/[<group>/]<selectorName>.json`** - the project store: three subtrees plus a top-level
   `"schema": 3`, **one writer each**. `addresses{}` (deployed-address registry) is written by the deploy
   recorder and `make adopt-token`; `lanes{}` (owner policy) by `make add-lane` / `make remove-lane`; `roles{}`

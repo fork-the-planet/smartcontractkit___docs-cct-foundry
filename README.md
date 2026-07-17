@@ -1557,7 +1557,37 @@ make fmt-config                                       # restore the canonical co
 
 The declaration is also **consumed**: [Step 5](#step-5-apply-chain-updates-configure-cross-chain-routes) run with no rate-limit env vars applies the declared `lanes{}` policy directly (declare once, apply from the declaration), while the rate-limit env vars remain the explicit override for incident response. An env-override apply that leaves the declaration missing or diverging prints the exact `make add-lane` command to bring it in line, and the doctor FAILs until it is — applies never write `lanes{}` back.
 
-The tooling is tested twice over: `forge test` pins the API->config transform against a committed real API response (`test/fixtures/ccip-api/`) and proves the `lanes{}` subtree contracts (`test/config/LaneConfig.t.sol`: a lane survives a `ccip` sync, `add-lane` touches no other subtree, a one-sided lane fails the mesh rung from either side; the inbound block is written and nested policy blocks survive rewrites; `test/config/VerifyChainLaneReconcile.t.sol` proves the on-chain lanes rung per state, including the 1.5.0 version-dispatch path and the multi-drift aggregation contract, with `test/config/VerifyChainCCVReconcile.t.sol` and `test/config/VerifyChainFinalityReconcile.t.sol` covering the CCV and poolPolicy reconciles; `test/setup/ApplyChainUpdatesLaneSource.t.sol` proves the env > `lanes{}` rate-limit resolution ladder and the `make add-lane` remediation hint states), and `bash script/config/test-tooling.sh` is a re-runnable failure-path suite (unknown chain, overwrite refusal, invalid names, `SELECTOR MISMATCH`, `SELECTOR NAME MISMATCH`, `NOT_FOUND`, API-down, non-EVM skip, the sync-check exit contract, an offline end-to-end sync against a local fixture server, the Makefile golden-path guards, the add-lane preflights and guards, the mesh-reciprocity doctor verdicts, and the canonical-format + zero-diff guarantees).
+The tooling is tested twice over: `forge test` pins the API->config transform against a committed real API response (`test/fixtures/ccip-api/`) and proves the `lanes{}` subtree contracts (`test/config/LaneConfig.t.sol`: a lane survives a `ccip` sync, `add-lane` touches no other subtree, a one-sided lane fails the mesh rung from either side; the inbound block is written and nested policy blocks survive rewrites; `test/config/VerifyChainLaneReconcile.t.sol` proves the on-chain lanes rung per state, including the 1.5.0 version-dispatch path and the multi-drift aggregation contract, with `test/config/VerifyChainCCVReconcile.t.sol` and `test/config/VerifyChainFinalityReconcile.t.sol` covering the CCV and poolPolicy reconciles; `test/setup/ApplyChainUpdatesLaneSource.t.sol` proves the env > `lanes{}` rate-limit resolution ladder and the `make add-lane` remediation hint states), and `bash script/config/test-tooling.sh` is a re-runnable failure-path suite (unknown chain, overwrite refusal, invalid names, `SELECTOR MISMATCH`, `SELECTOR NAME MISMATCH`, `NOT_FOUND`, API-down, non-EVM skip, the sync-check exit contract, an offline end-to-end sync against a local fixture server, the Makefile golden-path guards, the add-lane preflights and guards, the mesh-reciprocity doctor verdicts, the canonical-format + zero-diff guarantees, and the manual-plane refusals, where `make sync` refuses a `configSource: "manual"` chain and never touches its addresses, a typo'd marker is refused rather than overwritten, `sync-check` SKIPs it, and a cross-plane `add-lane` is refused naming both chains; `test/config/VerifyChainManualPlane.t.sol` pins the doctor's schema/API/mesh branches for the marker).
+
+### Manual address planes: a non-API deployment per clone
+
+Every `ccip{}` address is normally sourced from the CCIP REST API. To run this repo against a deployment the API does **not** serve (the same real chain selectors and chainIds, but a different Router / RMN proxy / TokenAdminRegistry / RegistryModuleOwnerCustom / FeeQuoter set), declare it in data: **one clone = one address plane.** Hand-edit the existing `config/chains/<selectorName>.json` in a reviewed diff, replace the `ccip{}` block with that plane's addresses, and stamp one optional key:
+
+```jsonc
+{
+  "name": "ethereum-testnet-sepolia",
+  "configSource": "manual", // absent = "api" (the default); "manual" = a reviewed hand edit owns ccip{}
+  "ccip": {
+    "router": "0x…", // the addresses for THIS plane
+    "feeQuoter": "0x…"
+    // …
+  }
+}
+```
+
+The marker flips the declared writer of `ccip{}` from the API to your reviewed edit, and every API-coupled tool reacts by name: `make sync` / `sync-all` **REFUSE** to touch the chain (a named SKIP, so the API can never overwrite your addresses back), `make sync-check` **SKIPs** it (the CI drift sweep stays green), and `make doctor`'s API rung is a named **SKIP + one WARN** (an address change on this plane is not API-detectable) while every other rung runs unchanged. With an RPC set, the on-chain rung also logs the FeeQuoter's `typeAndVersion` as a version check. `make add-lane` and the doctor's mesh rung **REFUSE a cross-plane lane** (one API chain plus one manual chain), naming both. Hand-editing `ccip{}` **without** the marker stays loud (doctor DRIFT + red `sync-check` + the next `sync` reverts it); the drift error points you at `configSource: "manual"` when the change is deliberate.
+
+Because the whole plane is a per-clone property (the shared chainIds would otherwise mix planes within one run), keep each plane in its own **git worktree** on your fork, so `config/chains` in each is internally consistent and the plane is a reviewed branch diff:
+
+```bash
+# main worktree stays on the API plane; a second worktree carries the manual plane
+git worktree add ../cct-manual-plane manual-plane
+cd ../cct-manual-plane
+# hand-edit config/chains/<selectorName>.json: swap ccip{} + add "configSource": "manual", commit
+make doctor CHAIN=<selectorName>        # API rung SKIPs+WARNs; schema/RPC/on-chain/mesh/roles run normally
+```
+
+This repo ships **no** address preset for any such plane, because those addresses change on redeploys and no external service tracks them, so the mechanism ships and the data never does. The reviewed branch diff (which addresses were in use, when) is your audit trail. See [`docs/config-schema.md`](docs/config-schema.md#manual-address-planes-configsource-manual).
 
 ### Authority durable store — the `roles{}` subtree
 
