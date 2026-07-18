@@ -7,6 +7,7 @@ import {console} from "forge-std/console.sol";
 
 import {IConfigSource} from "../../src/config/IConfigSource.sol";
 import {CcipApiSource} from "../../src/config/CcipApiSource.sol";
+import {ChainConfig} from "../../src/config/ChainConfig.sol";
 import {RegistryWriter} from "../../src/utils/RegistryWriter.sol";
 import {ProjectStore} from "../../src/utils/ProjectStore.sol";
 
@@ -78,6 +79,39 @@ contract SyncCcipConfig is Script {
         if (keccak256(bytes(fam)) != keccak256(bytes("evm"))) {
             console.log(
                 string.concat("[sync] SKIP ", name, " - chainFamily ", fam, " is not EVM-syncable (non-EVM chain)")
+            );
+            return true;
+        }
+        return false;
+    }
+
+    /// @dev Manual-plane guard, Solidity-side so no invocation path can overwrite a hand-maintained
+    /// `ccip{}` block from the API. A `configSource: "manual"` chain declares that a reviewed hand edit,
+    /// not the API sync, owns its addresses (the API does not serve this address plane); every sync
+    /// entrypoint refuses it by name and leaves the file byte-identical.
+    function _skipManual(string memory name, string memory json) internal view returns (bool) {
+        // Fail CLOSED on an unrecognized value: an unknown configSource must NOT fall back to "api" and
+        // overwrite the addresses. Refuse the sync and name the fix (the doctor's schema rung agrees).
+        if (!ChainConfig.isKnownConfigSource(json)) {
+            revert(
+                string.concat(
+                    "[sync] ",
+                    name,
+                    " has an unknown configSource \"",
+                    ChainConfig.configSource(json),
+                    "\" - use \"api\" or \"manual\"; refusing to sync so the addresses are not overwritten"
+                )
+            );
+        }
+        if (ChainConfig.isManual(json)) {
+            console.log(
+                string.concat(
+                    "[sync] SKIP ",
+                    name,
+                    " - configSource is manual; the API does not write this address plane. Edit config/chains/",
+                    name,
+                    ".json by hand (git is the audit trail)"
+                )
             );
             return true;
         }
@@ -194,6 +228,7 @@ contract SyncCcipConfig is Script {
     function preview(string memory name) public returns (string memory flatJson) {
         _requireSyncProfile();
         string memory json = vm.readFile(_requireConfigExists(name));
+        if (_skipManual(name, json)) return "";
         if (_skipNonEvm(name, json)) return "";
         uint64 selector = uint64(vm.parseJsonUint(json, ".chainSelector"));
         flatJson = _source().fetchActiveCcipConfig(selector);
@@ -215,6 +250,7 @@ contract SyncCcipConfig is Script {
         _requireSyncProfile();
         string memory path = _requireConfigExists(name);
         string memory json = vm.readFile(path);
+        if (_skipManual(name, json)) return;
         uint64 selector = uint64(vm.parseJsonUint(json, ".chainSelector"));
 
         if (_skipNonEvm(name, json)) {
@@ -483,6 +519,8 @@ contract SyncCcipConfig is Script {
     function check(string memory name) public {
         _requireSyncProfile();
         string memory json = vm.readFile(_requireConfigExists(name));
+        // A manual-plane chain has no API to drift against: SKIP (no revert) so sync-check stays CLEAN.
+        if (_skipManual(name, json)) return;
         uint64 selector = uint64(vm.parseJsonUint(json, ".chainSelector"));
 
         if (_skipNonEvm(name, json)) {
@@ -502,7 +540,8 @@ contract SyncCcipConfig is Script {
                         name,
                         " (raw escape hatch: FOUNDRY_PROFILE=sync forge script script/config/SyncCcipConfig.s.sol --sig \"run(string)\" ",
                         name,
-                        ", then make fmt-config - vm.writeJson output is not canonical)"
+                        ", then make fmt-config - vm.writeJson output is not canonical).",
+                        " If this is an intended non-API plane, mark this chain configSource: \"manual\" instead and the sync leaves it untouched"
                     )
                 );
             }
@@ -538,7 +577,8 @@ contract SyncCcipConfig is Script {
                     name,
                     " (raw escape hatch: FOUNDRY_PROFILE=sync forge script script/config/SyncCcipConfig.s.sol --sig \"run(string)\" ",
                     name,
-                    ", then make fmt-config - vm.writeJson output is not canonical)"
+                    ", then make fmt-config - vm.writeJson output is not canonical).",
+                    " If these addresses are an intended non-API plane, mark this chain configSource: \"manual\" instead and the sync leaves it untouched"
                 )
             );
         }
@@ -679,6 +719,33 @@ contract SyncCcipConfig is Script {
         require(
             keccak256(bytes(vm.parseJsonString(localConfig, ".chainFamily"))) == keccak256(bytes("evm")),
             string.concat("[add-lane] ", local, " is a non-EVM chain (destination-only) - it has no outbound lanes{}")
+        );
+        // Reject an unknown configSource on either side first, so two unrecognized values cannot read
+        // as a matching "api" pair and slip past the cross-plane check below.
+        require(
+            ChainConfig.isKnownConfigSource(localConfig),
+            string.concat("[add-lane] ", local, " has an unknown configSource - use \"api\" or \"manual\"")
+        );
+        require(
+            ChainConfig.isKnownConfigSource(remoteConfig),
+            string.concat("[add-lane] ", remote, " has an unknown configSource - use \"api\" or \"manual\"")
+        );
+        // Cross-plane refusal: a lane must connect two chains on the SAME address plane. One chain
+        // sourced from the API and the other hand-maintained (`configSource: "manual"`) would wire a
+        // lane across two different address directories, so refuse by name stating both planes.
+        require(
+            ChainConfig.isManual(localConfig) == ChainConfig.isManual(remoteConfig),
+            string.concat(
+                "[add-lane] cross-plane lane refused: ",
+                local,
+                " (configSource=",
+                ChainConfig.configSource(localConfig),
+                ") and ",
+                remote,
+                " (configSource=",
+                ChainConfig.configSource(remoteConfig),
+                ") are on different address planes - a lane must connect two chains on the same plane"
+            )
         );
 
         // Seed the project skeleton on first touch so the targeted `.lanes` write never raw-reverts.

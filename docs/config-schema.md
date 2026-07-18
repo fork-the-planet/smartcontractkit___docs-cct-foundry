@@ -46,7 +46,8 @@ tracks `project/` gets a git diff there too (see [The project store](#the-projec
 
 | File            | Subtree / field group                                                                                                                   | Owner                                          | Sole writer                                                                                                            |
 | --------------- | --------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| `config/chains` | `ccip{}` + the API-served identity/metadata fields (`displayName`, `chainFamily`, `environment`, `explorerUrl`, `nativeCurrencySymbol`) | the CCIP REST API                              | the **API sync** (`make add-chain` / `sync` / `sync-all`) - never by hand                                              |
+| `config/chains` | `ccip{}` + the API-served identity/metadata fields (`displayName`, `chainFamily`, `environment`, `explorerUrl`, `nativeCurrencySymbol`), **when `configSource` is `"api"` (the default)** | the CCIP REST API | the **API sync** (`make add-chain` / `sync` / `sync-all`) - never by hand |
+| `config/chains` | the same `ccip{}` + identity/metadata fields **when `configSource: "manual"`** (an address plane the CCIP API does not serve) | the plane operator | a **reviewed hand edit** in a pull request - the API sync REFUSES to write it (SKIP by name), `sync-check` and the doctor's API rung SKIP, and a cross-plane lane is refused (see [Manual address planes](#manual-address-planes-configsource-manual)) |
 | `config/chains` | the three hand-authored keys the API serves nothing for (`chainNameIdentifier`, `rpcEnv`, `confirmations`)                              | repo maintainers                               | a **reviewed hand edit** in a pull request                                                                             |
 | `config/chains` | immutable join keys (`name`, `chainSelector`, `chainId`)                                                                                | the chain-selectors registry                   | seeded at `add-chain`, then **guard-validated** by the sync (never rewritten)                                          |
 | `project`       | `addresses{}` (the deployed-address registry sub-store)                                                                                 | the deployer                                   | the **deploy scripts** (one `DeploymentRecorder` call → `RegistryWriter`) and **`make adopt-token`**, on `--broadcast` |
@@ -137,6 +138,7 @@ API serves nothing for it, so a reviewed PR owns it and the sync preserves it ve
 | `chainNameIdentifier`            | UPPER_SNAKE string                    | hand                 | — (not in the API)                                | `ChainConfig.load`; the `<ID>_*` env prefix   |
 | `rpcEnv`                         | env-var name string                   | hand                 | — (not in the API)                                | fork setup; the doctor's RPC rung             |
 | `confirmations`                  | number                                | hand                 | — (`chainConfig.finality`/`blockTime` are `null`) | `ChainConfig.load`                            |
+| `configSource`                   | `"api"` (default when absent) \| `"manual"` | hand (optional) | not served by the API                     | the sync + `sync-check` (SKIP/refuse if not `"api"`); the doctor's API, on-chain, and mesh rungs; `add-lane` |
 
 The `lanes.<remote>` field rows (`remoteSelector`, `capacity`, `rate`, `inbound`, the `v2` blocks) live
 with the subtree in the project store - see
@@ -172,6 +174,51 @@ a config file is a schema-rung FAIL naming the move (see
 > **Targeted key reads, not whole-struct decode.** `ChainConfig` reads by path (`.ccip.router`,
 > `.chainSelector`, …), so it is order-independent and robust to the alphabetical key reordering that
 > `vm.writeJson` and the canonical `jq --indent 2 -S` format perform.
+
+## Manual address planes (`configSource: "manual"`)
+
+Every `ccip{}` address is normally sourced from the CCIP REST API. Some deployments are not served by
+that API - for example a pre-release or otherwise non-production CCIP deployment that reuses the SAME
+real chain selectors and chainIds but a DIFFERENT Router / RMN proxy / TokenAdminRegistry /
+RegistryModuleOwnerCustom / FeeQuoter set. For those, one clone = one address plane, declared in data:
+a reviewer hand-edits the existing `config/chains/<selectorName>.json`, replaces the `ccip{}` block with
+that plane's addresses, and stamps a single optional key `"configSource": "manual"`. Absent, it reads as
+`"api"` - byte-identical to a config that never carried the key.
+
+The marker flips the declared WRITER of the `ccip{}` subtree from the API to a reviewed hand edit (the
+[one-writer table](#one-writer-per-subtree) gains a row, not an exception), and every API-coupled tool
+reacts by name:
+
+- `make sync` / `make sync-all` REFUSE to write a manual chain (a named `[sync] SKIP <name> -
+  configSource is manual` line, exit 0) - the API sync can never overwrite the hand-maintained
+  addresses back to the API's plane. `configSource` must be exactly `"api"` or `"manual"`; an unrecognized value
+  (a typo like `"Manual"`) is refused with a named error, never quietly treated as `"api"` and
+  overwritten (fail-closed), and the doctor's schema rung FAILs it too.
+- `make sync-check` treats a manual chain as SKIP, so the CI drift sweep stays green and honest.
+- `make doctor`'s API rung is a named SKIP plus one WARN (the residual risk: an address change on this
+  plane is not API-detectable, so on a failure re-verify the `ccip{}` addresses against your address
+  source). Every other rung (schema, RPC, on-chain code, TAR, mesh, lanes, roles) is a pure RPC / file
+  read and runs unchanged. With an RPC configured, the on-chain rung also logs the FeeQuoter's
+  `typeAndVersion` as a quick check that the plane is the intended CCIP version (the FeeQuoter, OnRamp,
+  and OffRamp carry the discriminating version string; the Router reports the same string across
+  versions, so it is never the version probe).
+- `make add-lane` and the doctor's mesh rung REFUSE a cross-plane lane - one API chain and one manual
+  chain - naming both chains and both `configSource` values. A lane must connect two chains on the same
+  address plane.
+
+The cross-plane refusal runs before the non-EVM reciprocity exemption, so a manual plane whose
+destination is a non-EVM chain (Solana, Aptos) must mark that chain's config `manual` too; the sync's
+manual refusal then also covers that chain's metadata refresh.
+
+Hand-editing a `ccip{}` block WITHOUT the marker stays loud: `make doctor` reports DRIFT, `make
+sync-check` goes red, and the next `make sync` reverts it. The drift error names `configSource: "manual"`
+as the intended path when the addresses are a deliberate non-API plane rather than stale.
+
+`make add-chain` stays API-only: a manual chain is never CREATED by tooling, only converted by a
+reviewed edit. This repo ships **no** address preset for any such plane - those addresses change on
+redeploys and no external service tracks them, so the mechanism is shipped and the data never is. Keep the whole plane in a
+branch (the reviewed diff is the audit trail of which addresses were in use when); the documented pattern
+is one git worktree per plane.
 
 ## The project store - `project/<selectorName>.json`
 
